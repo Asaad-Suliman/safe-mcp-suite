@@ -27,3 +27,4 @@ audit/
 .idea/
 *.swp
 .DS_Store
+PHASE*_PROGRESS.md
