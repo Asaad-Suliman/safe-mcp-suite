@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Synthetic secret-shaped fixtures required to test the redaction engine. These
+are non-functional literals — AWS's published example access key, the standard
+example JWT, and invented tokens. No real credential appears in this repo.
+"""
+paths = [
+  '''tests/test_redact\.py''',
+  '''tests/test_audit\.py''',
+]
