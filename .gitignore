@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# venv
+.venv/
+venv/
+env/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# audit logs
+*.audit.log
+audit/
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
