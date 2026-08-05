@@ -55,3 +55,67 @@ reason = "force-push rewrites shared history"
 command = "git"
 deny_args = ["clean -fdx"]
 reason = "git clean -fdx destroys untracked work irreversibly"
+
+
+# ---------------------------------------------------------------------------
+# FILE ORGANIZER SERVER
+# ---------------------------------------------------------------------------
+# Only regular files are organizable. Directories and symlinks match no allow
+# rule and are refused by deny-by-default — there is no line below to delete that
+# would turn symlink-following on.
+#
+# There is no delete tool in this server. Nothing here can trash a file.
+[files]
+# The directory the organizer may touch. REQUIRED — set it here or via
+# SAFE_MCP_WORKSPACE_ROOT (env wins). Startup refuses if unset; there is no
+# fallback to the launch directory or to a folder in $HOME.
+# workspace_root = "/srv/safe-mcp/inbox"
+
+# Undo/redo state. Must live OUTSIDE workspace_root, or the organizer would
+# treat its own journal as a file to be filed away. Env: SAFE_MCP_FILES_JOURNAL.
+journal = "organizer-journal.json"
+
+# Cap on how many moves one plan may contain. A larger workspace still plans;
+# the plan is truncated and reported as such rather than returning unbounded.
+max_plan_moves = 500
+
+# Extension -> destination folder. An extension may appear in only one category.
+[files.categories]
+Documents = [".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".epub"]
+Spreadsheets = [".xls", ".xlsx", ".ods", ".csv"]
+Presentations = [".ppt", ".pptx", ".odp"]
+Images = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".svg", ".heic", ".ico"]
+Audio = [".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma"]
+Videos = [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".m4v"]
+Archives = [".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".iso"]
+
+# Skip rules. Each entry becomes DENY rules for the "organize" action.
+#   when     — attributes EVERY generated rule requires (an AND)
+#   any_ext  — one rule per extension  (an OR)
+#   any_name — one rule per filename   (an OR)
+# Attribute names are validated at startup against what the server can actually
+# observe, so a typo is a loud failure rather than a rule that never fires.
+# Observable attributes: file, dir, symlink, hidden, empty, unsafe-name,
+# plus ext:<.ext> and name:<filename>.
+
+[[files.skip]]
+when = ["hidden"]
+reason = "dotfiles are configuration, not clutter to be filed"
+
+[[files.skip]]
+when = ["unsafe-name"]
+reason = "the name contains control characters and cannot be safely displayed or logged"
+
+[[files.skip]]
+any_ext = [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".lnk", ".appimage", ".run", ".deb", ".rpm", ".dmg", ".pkg", ".apk"]
+reason = "installers, executables and shortcuts are left where the user put them"
+
+[[files.skip]]
+any_name = ["desktop.ini", "thumbs.db", ".ds_store"]
+reason = "operating-system metadata, not user files"
+
+# Dotfiles are already covered by the "hidden" rule above; these are the
+# project files that carry no leading dot.
+[[files.skip]]
+any_name = ["makefile", "dockerfile", "readme.md", "license"]
+reason = "project files belong beside the project"
