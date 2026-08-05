@@ -34,7 +34,7 @@ from safety.policy import Policy, evaluate
 from safety.result import OperationResult, ResultCode, failed
 from servers.files import inspect
 
-__all__ = ["ACTION", "Move", "Skip", "Plan", "build", "verify"]
+__all__ = ["ACTION", "Move", "Skip", "Plan", "build", "verify", "occupied"]
 
 #: Action name used on results produced by this module.
 ACTION = "plan_organize"
@@ -150,18 +150,13 @@ def build(
             )
             continue
 
-        # Only the category *directory* is resolved, and the filename is appended
-        # afterwards. Resolving the full destination would follow a symlink sitting
-        # at that name and silently retarget the move to whatever it points at —
-        # the plan would say "Documents/report.pdf" and the file would land
-        # somewhere else entirely. The leaf is never resolved, so a symlink there
-        # is seen by _exists() below and refused instead of followed.
-        #
-        # The category name comes from config, and a category called "../x" would
-        # aim the whole category outside the workspace. config rejects such a name
-        # at startup; this is the second lock on the same door.
-        category_dir = jail.resolve(facts.category)
-        if category_dir is None:
+        # resolve_for_write, not resolve: a symlink sitting at the destination name
+        # must not redirect the move to whatever it points at. The category name
+        # comes from config, and one called "../x" would aim the whole category
+        # outside the workspace — config rejects that at startup, and this is the
+        # second lock on the same door.
+        dest = jail.resolve_for_write(Path(facts.category) / facts.name)
+        if dest is None:
             skips.append(
                 Skip(
                     name=facts.name,
@@ -172,9 +167,8 @@ def build(
                 )
             )
             continue
-        dest = category_dir / facts.name
 
-        if _exists(dest):
+        if occupied(dest):
             # Reported now rather than discovered at apply time, so the proposal
             # a human reads is the truth. apply checks again anyway.
             skips.append(
@@ -206,7 +200,7 @@ def build(
     )
 
 
-def _exists(path: Path) -> bool:
+def occupied(path: Path) -> bool:
     """True if anything occupies ``path``, including a broken symlink.
 
     ``Path.exists()`` follows links and answers False for a dangling one, which
@@ -254,7 +248,7 @@ def verify(plan: Plan) -> OperationResult | None:
                 detail={"plan_id": plan.plan_id, "stale": move.src.name},
             )
 
-        if _exists(move.dest):
+        if occupied(move.dest):
             return failed(
                 ResultCode.OPERATION_FAILED,
                 ACTION,

@@ -68,6 +68,31 @@ class PathJail:
         resolved = base.resolve()
         return resolved if self._inside(resolved) else None
 
+    def resolve_for_write(self, candidate: str | Path) -> Path | None:
+        """Resolve where ``candidate`` *lives*, without following a link at its name.
+
+        :meth:`resolve` answers "what does this path point at", which is the right
+        question for a directory a command will run in. It is the wrong question
+        for the target of a write. If a symlink sits at ``Documents/report.pdf``,
+        resolving the whole path returns the link's *target*, and a caller that
+        renames onto the result writes somewhere it never named — the symlink
+        silently redirects the operation.
+
+        So only the parent is resolved and checked for containment; the final
+        component is appended verbatim and never followed. The parent being inside
+        the jail is enough, because a bare filename cannot climb out of it.
+
+        A candidate whose final component is empty, ``.``, or ``..`` has no
+        meaningful name to write to and returns None rather than a path pointing
+        at a directory the caller did not ask for.
+        """
+        raw = Path(candidate).expanduser()
+        if raw.name in ("", ".", ".."):
+            return None
+        base = raw if raw.is_absolute() else self.root / raw
+        parent = base.parent.resolve()
+        return parent / raw.name if self._inside(parent) else None
+
     def contains(self, path: str | Path) -> bool:
         """True if ``path`` resolves to the jail root or somewhere beneath it."""
         return self.resolve(path) is not None

@@ -123,3 +123,82 @@ def test_contains_agrees_with_resolve(jail):
     assert jail.contains("sub/file.txt") is True
     assert jail.contains("../../etc/passwd") is False
     assert jail.contains(jail.root) is True
+
+
+# --- resolve_for_write: containment without following the leaf ------------
+#
+# resolve() answers "what does this point at", which is right for a directory a
+# command runs in and wrong for the target of a write: a symlink at the target
+# name would redirect the write to somewhere the caller never named.
+
+
+def test_resolve_for_write_returns_the_named_path_not_the_link_target(jail):
+    """The property the whole method exists for."""
+    target = jail.root / "real.txt"
+    target.write_text("x")
+    link = jail.root / "link.txt"
+    link.symlink_to(target)
+
+    assert jail.resolve_for_write("link.txt") == jail.root / "link.txt"
+    assert jail.resolve("link.txt") == target, "resolve still follows, by design"
+
+
+def test_resolve_for_write_allows_a_path_that_does_not_exist_yet(jail):
+    assert jail.resolve_for_write("Documents/new.pdf") == (
+        jail.root / "Documents" / "new.pdf"
+    )
+
+
+def test_resolve_for_write_accepts_a_plain_name(jail):
+    assert jail.resolve_for_write("a.txt") == jail.root / "a.txt"
+
+
+@pytest.mark.parametrize(
+    "escape", ["../outside.txt", "../../etc/passwd", "sub/../../outside.txt"]
+)
+def test_resolve_for_write_refuses_traversal(jail, escape):
+    assert jail.resolve_for_write(escape) is None
+
+
+def test_resolve_for_write_refuses_an_absolute_path_outside(jail, tmp_path):
+    assert jail.resolve_for_write(tmp_path / "elsewhere" / "x.txt") is None
+
+
+def test_resolve_for_write_accepts_an_absolute_path_inside(jail):
+    assert jail.resolve_for_write(jail.root / "a.txt") == jail.root / "a.txt"
+
+
+def test_resolve_for_write_refuses_a_symlinked_parent_pointing_outside(jail, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (jail.root / "escape").symlink_to(outside, target_is_directory=True)
+
+    assert jail.resolve_for_write("escape/stolen.txt") is None
+
+
+def test_resolve_for_write_allows_a_symlinked_parent_pointing_inside(jail):
+    (jail.root / "real").mkdir()
+    (jail.root / "alias").symlink_to(jail.root / "real", target_is_directory=True)
+
+    assert jail.resolve_for_write("alias/x.txt") == jail.root / "real" / "x.txt"
+
+
+@pytest.mark.parametrize("bad", ["", ".", "..", "sub/.."])
+def test_resolve_for_write_refuses_a_candidate_with_no_real_name(jail, bad):
+    """There is nothing to write to; returning the parent would be a surprise."""
+    assert jail.resolve_for_write(bad) is None
+
+
+def test_resolve_for_write_lets_pathlib_normalize_a_trailing_dot(jail):
+    """`sub/.` is just `sub` by the time pathlib is done with it.
+
+    Documented rather than special-cased: the result is still inside the jail, so
+    it is a naming oddity and not an escape. A caller using it as a move
+    destination is refused later anyway, because the directory already exists.
+    """
+    assert jail.resolve_for_write("sub/.") == jail.root / "sub"
+
+
+def test_resolve_for_write_does_not_create_anything(jail):
+    jail.resolve_for_write("Documents/deeply/nested/new.pdf")
+    assert list(jail.root.iterdir()) == []
