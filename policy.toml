@@ -1,0 +1,57 @@
+# Policy for the safe-mcp-suite terminal server.
+#
+# DENY-BY-DEFAULT: a command whose name is not in [allowlist] is denied.
+# DENY WINS: a command in both lists is denied.
+# Command-name matching is case-insensitive (`RM` is treated as `rm`).
+# Commands containing shell metacharacters ( ; | & < > ` $( ) are rejected
+# before any allow/deny check — no chaining, redirection, or substitution.
+
+# Jail root: the directory commands may run in. REQUIRED — set it here or via
+# SAFE_MCP_JAIL_ROOT (env wins). Startup refuses if unset; there is no fallback
+# to the launch directory. Use an absolute path to a dedicated sandbox, and keep
+# the audit log OUTSIDE it — a permitted command inside the jail could otherwise
+# read the trail or append forged records to it.
+# jail_root = "/srv/safe-mcp/sandbox"
+
+# Audit trail: every tool invocation is appended as one JSON line.
+# "closed" refuses to run a command whose record cannot be written, so there is
+# no unlogged execution. "open" runs anyway and warns on stderr.
+# Env overrides: SAFE_MCP_AUDIT_LOG, SAFE_MCP_AUDIT_FAIL_MODE.
+audit_log = "audit.jsonl"
+audit_fail_mode = "closed"
+
+# Execution limits.
+[limits]
+timeout_seconds = 30
+max_output_bytes = 65536
+
+# Secret redaction over command output and audit records.
+# entropy_fallback catches unrecognised high-entropy tokens but trips on git
+# SHAs, UUIDs, and base64 data — off by default. extra_patterns lets an operator
+# add named rules; an invalid regex fails loudly at startup.
+[redaction]
+enabled = true
+entropy_fallback = false
+extra_patterns = []   # e.g. [{ name = "internal_id", regex = "INT-[0-9]{8}" }]
+
+[allowlist]
+# Commands permitted to run, by name. Arguments may still be restricted below.
+commands = ["ls", "cat", "echo", "pwd", "git"]
+
+[denylist]
+# Always denied, even if also present in the allowlist.
+commands = ["rm", "shutdown", "reboot", "curl", "wget", "chmod", "sudo"]
+
+# Argument-level rules: a command allowed in general, denied for specific
+# argument patterns. A rule fires when ALL tokens of any deny_args pattern are
+# present among the arguments, in any order — so `git push --force` and
+# `git --force push` are both denied.
+[[rules]]
+command = "git"
+deny_args = ["push --force", "push -f"]
+reason = "force-push rewrites shared history"
+
+[[rules]]
+command = "git"
+deny_args = ["clean -fdx"]
+reason = "git clean -fdx destroys untracked work irreversibly"
