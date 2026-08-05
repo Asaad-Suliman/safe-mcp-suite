@@ -30,12 +30,19 @@ Documents = [".pdf", ".md"]
 Images = [".png"]
 
 [[files.skip]]
+layer = "restraint"
 when = ["hidden"]
 reason = "dotfiles are configuration"
 
 [[files.skip]]
+layer = "restraint"
 any_ext = [".exe"]
 reason = "installers are left alone"
+
+[[files.skip]]
+layer = "protection"
+when = ["unsafe-name"]
+reason = "the name carries control characters"
 """
 
 

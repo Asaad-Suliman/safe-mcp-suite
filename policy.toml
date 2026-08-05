@@ -60,9 +60,24 @@ reason = "git clean -fdx destroys untracked work irreversibly"
 # ---------------------------------------------------------------------------
 # FILE ORGANIZER SERVER
 # ---------------------------------------------------------------------------
-# Only regular files are organizable. Directories and symlinks match no allow
-# rule and are refused by deny-by-default — there is no line below to delete that
-# would turn symlink-following on.
+# TWO LAYERS OF RULE. Every skip rule below declares which one it belongs to.
+#
+#   protection — a safety invariant. Binding on every tool, however the request
+#                was phrased. Nothing you can ask for makes it permitted.
+#   restraint  — a rule that exists because filing this AUTOMATICALLY would be a
+#                guess. It stops the organizer; it does not stop a request that
+#                names one specific file.
+#
+# So: plan_organize enforces both layers. move_file enforces protection only,
+# because a request naming one file contains no guess to protect anyone from.
+# move_file will therefore move an installer or a dotfile if you ask it to by
+# name, and will still refuse a symlink, a path leaving the workspace, a name
+# carrying control characters, and any destination that already exists.
+#
+# Only regular files are organizable — plan_organize never proposes moving a
+# directory, and move_file will move one only when asked. A symlink matches no
+# allow rule in EITHER layer and is refused by deny-by-default; there is no line
+# below to delete that would turn symlink-following on.
 #
 # There is no delete tool in this server. Nothing here can trash a file.
 [files]
@@ -90,32 +105,43 @@ Videos = [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".m4v"]
 Archives = [".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".iso"]
 
 # Skip rules. Each entry becomes DENY rules for the "organize" action.
+#   layer    — REQUIRED. "protection" or "restraint". See the two layers above.
 #   when     — attributes EVERY generated rule requires (an AND)
 #   any_ext  — one rule per extension  (an OR)
 #   any_name — one rule per filename   (an OR)
+# There is no default layer. Whether a rule is a safety invariant or a refusal to
+# guess is a judgement about your files, and it cannot be read off the rule text:
+# any_ext = [".exe"] is a restraint on a desktop and an invariant on a server.
+# An entry without a layer is a startup failure, not a guess.
+#
 # Attribute names are validated at startup against what the server can actually
 # observe, so a typo is a loud failure rather than a rule that never fires.
 # Observable attributes: file, dir, symlink, hidden, empty, unsafe-name,
 # plus ext:<.ext> and name:<filename>.
 
 [[files.skip]]
-when = ["hidden"]
-reason = "dotfiles are configuration, not clutter to be filed"
-
-[[files.skip]]
+layer = "protection"
 when = ["unsafe-name"]
 reason = "the name contains control characters and cannot be safely displayed or logged"
 
 [[files.skip]]
-any_ext = [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".lnk", ".appimage", ".run", ".deb", ".rpm", ".dmg", ".pkg", ".apk"]
-reason = "installers, executables and shortcuts are left where the user put them"
+layer = "restraint"
+when = ["hidden"]
+reason = "dotfiles are configuration, not clutter to be filed"
 
 [[files.skip]]
+layer = "restraint"
+any_ext = [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".lnk", ".appimage", ".run", ".deb", ".rpm", ".dmg", ".pkg", ".apk", ".app"]
+reason = "installers, executables and application folders are left where the user put them"
+
+[[files.skip]]
+layer = "restraint"
 any_name = ["desktop.ini", "thumbs.db", ".ds_store"]
 reason = "operating-system metadata, not user files"
 
 # Dotfiles are already covered by the "hidden" rule above; these are the
 # project files that carry no leading dot.
 [[files.skip]]
+layer = "restraint"
 any_name = ["makefile", "dockerfile", "readme.md", "license"]
 reason = "project files belong beside the project"

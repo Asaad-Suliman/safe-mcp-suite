@@ -6,14 +6,21 @@ a *file format*. ``safety/policy.py`` evaluates rules and reads no files;
 is where an operator's TOML becomes ``Rule`` objects, and it adds no precedence
 logic of its own — deny-wins and deny-by-default already belong to ``evaluate()``.
 
-Two translation decisions are worth reading before the code.
+Three translation decisions are worth reading before the code.
 
-**What is organizable at all.** Exactly one ALLOW rule is generated, and it
-requires the ``file`` attribute. So a regular file is organizable unless a skip
-rule denies it, while a directory or a symlink matches no allow rule and is
-refused by deny-by-default — without any rule being written for it. That keeps
-the core property pointed at the dangerous cases: enabling symlink traversal is
-not something an operator can do by deleting a line.
+**What is movable at all**, in :data:`BASE_RULES` — generated in code, so there is
+no line in the TOML an operator could delete to widen them. A regular file and a
+directory are each allowed at the PROTECTION layer, and a directory is then denied
+again at RESTRAINT: the organizer will not guess a category for a folder, but a
+request that names one is not guessing. A **symlink** matches no allow rule in
+either layer and is refused by deny-by-default, without any rule being written for
+it — enabling symlink traversal remains something no configuration can express.
+
+**Every skip rule declares its layer, and none is inferred.** ``layer`` is a
+required key, not a defaulted one. Which rules are safety invariants and which are
+the organizer declining to guess is a judgement about the operator's own files, and
+the loader is in no position to make it from the rule's text. An entry without a
+layer is a startup failure.
 
 **Skip rules are validated against the producer's vocabulary.** Every attribute
 named in a rule must be one ``inspect.py`` can actually emit. A rule written for
@@ -29,12 +36,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from safety.audit import FAIL_CLOSED, FAIL_OPEN
-from safety.policy import ALLOW, DENY, Policy, Rule
+from safety.policy import ALLOW, DENY, PROTECTION, RESTRAINT, Policy, Rule
 from safety.redact import compile_extra
 from servers.files.inspect import (
     ACTION,
     ATTRIBUTE_PREFIXES,
     BARE_ATTRIBUTES,
+    DIRECTORY,
     EXT_PREFIX,
     FILE,
     NAME_PREFIX,
@@ -43,6 +51,7 @@ from servers.files.inspect import (
 __all__ = [
     "ConfigError",
     "FilesConfig",
+    "BASE_RULES",
     "ENV_POLICY_FILE",
     "ENV_WORKSPACE_ROOT",
     "ENV_JOURNAL",
@@ -69,6 +78,40 @@ DEFAULT_MAX_PLAN_MOVES = 500
 
 class ConfigError(Exception):
     """Raised when the policy file is missing, unparseable, or malformed."""
+
+
+#: What is movable at all, before any operator rule is read. Written in code
+#: rather than shipped in the TOML because these are not a matter of taste, and a
+#: default an operator can delete is not a default.
+#:
+#: A symlink is absent on purpose: it matches no allow rule here, in either layer,
+#: and falls to deny-by-default. There is nothing to delete to turn it on.
+BASE_RULES = (
+    Rule(
+        action=ACTION,
+        effect=ALLOW,
+        attributes=frozenset({FILE}),
+        layer=PROTECTION,
+        reason="regular files are movable unless a rule says otherwise",
+    ),
+    Rule(
+        action=ACTION,
+        effect=ALLOW,
+        attributes=frozenset({DIRECTORY}),
+        layer=PROTECTION,
+        reason="a directory is movable when a request names one",
+    ),
+    Rule(
+        action=ACTION,
+        effect=DENY,
+        attributes=frozenset({DIRECTORY}),
+        layer=RESTRAINT,
+        reason=(
+            "a directory has no extension to file it by, so the organizer will "
+            "not guess a category for one; move it by name if that is what you want"
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -156,13 +199,37 @@ def _check_attribute(attribute: str, where: str) -> str:
     return attribute
 
 
+def _check_layer(entry: dict, where: str) -> str:
+    """Read the required ``layer`` key. There is no default, and that is the point.
+
+    A rule is either a safety invariant or the organizer declining to guess, and
+    which one it is cannot be read off the rule's text: ``any_ext = ['.exe']`` is a
+    restraint in one deployment and an invariant in another. Defaulting would pick
+    one of those silently for an operator who never knew there was a choice.
+    """
+    value = entry.get("layer")
+    if value is None:
+        raise ConfigError(
+            f"{where} must declare a layer. Use layer = {PROTECTION!r} for a safety "
+            f"invariant, which every tool obeys, or layer = {RESTRAINT!r} for a rule "
+            f"that only stops the organizer guessing — move_file still moves a file "
+            f"a request names."
+        )
+    if value not in (PROTECTION, RESTRAINT):
+        raise ConfigError(
+            f"{where}.layer must be {PROTECTION!r} or {RESTRAINT!r}, got {value!r}"
+        )
+    return value
+
+
 def _skip_rules(raw: object) -> tuple[Rule, ...]:
     """Translate ``[[files.skip]]`` entries into DENY rules.
 
     ``when`` lists attributes every generated rule requires. ``any_ext`` and
     ``any_name`` each fan out into one rule per value, exactly as the terminal
     loader turns each ``deny_args`` pattern into its own rule — because a single
-    rule's attributes are an AND, and "any of these extensions" is an OR.
+    rule's attributes are an AND, and "any of these extensions" is an OR. Every
+    rule fanned out from one entry carries that entry's layer.
 
     An entry that would generate a rule with no required attributes is refused: a
     blanket deny of every file is certainly not what "skip these" was meant to say.
@@ -176,11 +243,13 @@ def _skip_rules(raw: object) -> tuple[Rule, ...]:
         if not isinstance(entry, dict):
             raise ConfigError(f"{where} must be a table")
 
-        unknown = set(entry) - {"when", "any_ext", "any_name", "reason"}
+        unknown = set(entry) - {"when", "any_ext", "any_name", "reason", "layer"}
         if unknown:
             # A misspelled key would otherwise be silently ignored, leaving a rule
             # that denies nothing.
             raise ConfigError(f"{where} has unknown key(s): {', '.join(sorted(unknown))}")
+
+        layer = _check_layer(entry, where)
 
         reason = entry.get("reason", "")
         if not isinstance(reason, str):
@@ -208,6 +277,7 @@ def _skip_rules(raw: object) -> tuple[Rule, ...]:
                     action=ACTION,
                     effect=DENY,
                     attributes=base,
+                    layer=layer,
                     reason=reason or f"skipped by rule {where}",
                 )
             )
@@ -219,6 +289,7 @@ def _skip_rules(raw: object) -> tuple[Rule, ...]:
                     action=ACTION,
                     effect=DENY,
                     attributes=base | {extra},
+                    layer=layer,
                     reason=reason or f"skipped by rule {where} ({extra})",
                 )
             )
@@ -318,17 +389,10 @@ def load(path: str | Path | None = None) -> FilesConfig:
     if unknown:
         raise ConfigError(f"[files] has unknown key(s): {', '.join(sorted(unknown))}")
 
-    # The whole translation. One ALLOW requiring `file`, plus the skip denials.
-    # Nothing else: a directory or symlink matches no allow rule and falls to
-    # deny-by-default without a rule being written for it.
-    rules = (
-        Rule(
-            action=ACTION,
-            effect=ALLOW,
-            attributes=frozenset({FILE}),
-            reason="regular files are organizable unless a skip rule says otherwise",
-        ),
-    ) + _skip_rules(files.get("skip", []))
+    # The whole translation: what is movable at all, plus the operator's skip
+    # denials. Nothing else — a symlink matches no allow rule in either layer and
+    # falls to deny-by-default without a rule being written for it.
+    rules = BASE_RULES + _skip_rules(files.get("skip", []))
 
     workspace_root = os.environ.get(ENV_WORKSPACE_ROOT) or files.get(
         "workspace_root", ""
