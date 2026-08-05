@@ -238,6 +238,15 @@ def _categories(section: dict) -> dict[str, str]:
         where = f"files.categories.{name}"
         if not name.strip():
             raise ConfigError("files.categories has an empty category name")
+        # A category becomes a directory name under the workspace root. One
+        # containing a separator or a `..` segment would aim every file in that
+        # category outside the workspace, so it is refused at startup rather than
+        # left for the jail to catch on every single move.
+        if "/" in name or "\\" in name or name == ".." or name.startswith(".."):
+            raise ConfigError(
+                f"{where}: a category name must be a plain folder name, "
+                f"with no path separators or '..' segments"
+            )
         for ext in _str_list(value, where):
             if not ext.startswith(".") or len(ext) < 2:
                 raise ConfigError(
