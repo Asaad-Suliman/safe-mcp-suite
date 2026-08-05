@@ -487,6 +487,17 @@ def move_file(src: str, dest: str) -> OperationResult:
             )
         ctx.targets = [_relative(resolved, ctx.jail.root)]
 
+        # Both ends are checked before any attempt record is written. An attempt
+        # means something was genuinely about to move; claiming one for an
+        # operation already doomed by its destination would make the trail lie
+        # about how far the server got. move_one checks again regardless.
+        if ctx.jail.resolve_for_write(dest) is None:
+            return failed(
+                ResultCode.PATH_ESCAPE,
+                ctx.tool,
+                f"destination path escapes the workspace: {dest!r}",
+            )
+
         try:
             facts = inspect.facts(resolved, categories=ctx.config.categories)
         except OSError:
