@@ -9,6 +9,7 @@ dependencies = ["mcp>=2.0"]
 
 [project.scripts]
 safe-mcp-terminal = "servers.terminal.server:main"
+safe-mcp-files = "servers.files.server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

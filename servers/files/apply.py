@@ -24,6 +24,7 @@ What :func:`move_one` enforces, in order:
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from safety.paths import PathJail
@@ -32,7 +33,7 @@ from servers.files.journal import Journal, JournalEntry, JournalError, JournalMo
 from servers.files.plan import Plan, occupied
 from servers.files.plan import verify as verify_plan
 
-__all__ = ["ACTION", "move_one", "apply_plan"]
+__all__ = ["ACTION", "move_one", "preflight", "apply_plan"]
 
 #: Action name used on results produced by this module.
 ACTION = "apply_plan"
@@ -111,6 +112,45 @@ def move_one(
         },
         duration_ms=int((time.monotonic() - start) * 1000),
     )
+
+
+def preflight(
+    moves: Sequence[JournalMove], *, jail: PathJail, action: str
+) -> OperationResult | None:
+    """Check a whole sequence of moves before performing any of them.
+
+    Returns ``None`` if every move looks possible, else the first problem found.
+    Used by undo and redo, which replay moves recorded in the journal and have no
+    fingerprint to compare against — the journal records what happened, not what
+    the files looked like.
+
+    Checking the batch up front is what keeps a half-finished undo rare: an undo
+    that reverses three files of five leaves a state neither the user nor the
+    journal describes.
+    """
+    for move in moves:
+        resolved_src = jail.resolve_for_write(move.src)
+        resolved_dest = jail.resolve_for_write(move.dest)
+        if resolved_src is None or resolved_dest is None:
+            return failed(
+                ResultCode.PATH_ESCAPE,
+                action,
+                f"recorded path escapes the workspace: {move.src!r} -> {move.dest!r}",
+            )
+        if not occupied(resolved_src):
+            return failed(
+                ResultCode.OPERATION_FAILED,
+                action,
+                f"cannot proceed: {move.src} is no longer there",
+            )
+        if occupied(resolved_dest):
+            return failed(
+                ResultCode.OPERATION_FAILED,
+                action,
+                "destination already exists, refusing to overwrite: "
+                f"{move.dest}",
+            )
+    return None
 
 
 def apply_plan(plan: Plan, *, jail: PathJail, journal: Journal) -> OperationResult:
