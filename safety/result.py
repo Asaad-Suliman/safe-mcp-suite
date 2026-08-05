@@ -30,7 +30,11 @@ class ResultCode(str, Enum):
     | Code              | Condition                                             |
     |-------------------|-------------------------------------------------------|
     | OK                | The operation ran and completed.                      |
-    | POLICY_DENIED     | Policy refused it. It was never attempted.            |
+    | POLICY_DENIED     | A safety invariant refused it. Never attempted, and   |
+    |                   | no way of asking makes it permitted.                  |
+    | NEEDS_EXPLICIT_   | It cleared every safety invariant and was declined    |
+    | REQUEST           | only because doing it unprompted would be a guess.    |
+    |                   | Not forbidden — name the target directly and ask.     |
     | INVALID_REQUEST   | The request was malformed and could not be evaluated. |
     | PATH_ESCAPE       | A path resolved outside the jail root. Not attempted. |
     | TIMEOUT           | The operation exceeded its time budget and was killed.|
@@ -44,6 +48,10 @@ class ResultCode(str, Enum):
 
     OK = "OK"
     POLICY_DENIED = "POLICY_DENIED"
+    # Distinct from POLICY_DENIED on purpose. Collapsing the two would leave a
+    # caller unable to tell "this is forbidden" from "ask me directly", and the
+    # only way to find out would be to try it.
+    NEEDS_EXPLICIT_REQUEST = "NEEDS_EXPLICIT_REQUEST"
     INVALID_REQUEST = "INVALID_REQUEST"
     PATH_ESCAPE = "PATH_ESCAPE"
     TIMEOUT = "TIMEOUT"

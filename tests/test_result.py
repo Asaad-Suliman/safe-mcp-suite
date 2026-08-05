@@ -37,6 +37,7 @@ def test_failed_is_not_ok():
     "code",
     [
         ResultCode.POLICY_DENIED,
+        ResultCode.NEEDS_EXPLICIT_REQUEST,
         ResultCode.PATH_ESCAPE,
         ResultCode.AUDIT_UNAVAILABLE,
         ResultCode.INTERNAL_ERROR,
@@ -45,6 +46,22 @@ def test_failed_is_not_ok():
 def test_failure_code_cannot_be_marked_successful(code):
     with pytest.raises(ValueError):
         succeeded("move_file", code=code)
+
+
+def test_a_restraint_refusal_is_its_own_code():
+    """"Forbidden" and "ask me directly" must not arrive as the same code.
+
+    A caller that cannot tell them apart can only find out by trying, which is
+    exactly what a refusal is meant to prevent.
+    """
+    restrained = failed(
+        ResultCode.NEEDS_EXPLICIT_REQUEST, "plan_organize", "installers are left alone"
+    )
+    forbidden = failed(ResultCode.POLICY_DENIED, "move_file", "a symlink is not moved")
+
+    assert restrained.ok is False
+    assert restrained.code is not forbidden.code
+    assert restrained.code.value == "NEEDS_EXPLICIT_REQUEST"
 
 
 @pytest.mark.parametrize("code", [ResultCode.OK, ResultCode.OUTPUT_TRUNCATED])
