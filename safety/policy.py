@@ -13,6 +13,16 @@ server parses argv, the organizer inspects the file. What happens next is shared
 1. Nothing is permitted unless a rule allows it.
 2. Any matching deny beats any matching allow.
 
+**Rules come in two layers, and they are not equally binding.** A PROTECTION rule
+is a safety invariant: the path escapes its jail, it is a symlink, its name
+carries control characters. A RESTRAINT rule is a rule that exists only because
+*automatic* classification would be a guess — installers, hidden files,
+directories. A caller acting on its own initiative must respect both. A caller
+carrying an explicit human request that names one specific target is not
+guessing, and for it a restraint rule is not a safety refusal. Which callers get
+which treatment is the server's decision; this module only makes the distinction
+available and makes it impossible to get backwards (see :func:`evaluate_layered`).
+
 This module is pure. It reads no files, runs nothing, and has no config format;
 a loader belongs with the servers that know what their config looks like.
 """
@@ -22,13 +32,34 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-__all__ = ["ALLOW", "DENY", "ANY_ACTION", "Rule", "Policy", "Decision", "evaluate"]
+__all__ = [
+    "ALLOW",
+    "DENY",
+    "ANY_ACTION",
+    "PROTECTION",
+    "RESTRAINT",
+    "Rule",
+    "Policy",
+    "Decision",
+    "evaluate",
+    "protection_only",
+    "evaluate_layered",
+]
 
 ALLOW = "allow"
 DENY = "deny"
 
 #: Action name that matches every action, for blanket rules.
 ANY_ACTION = "*"
+
+#: A safety invariant. Binding on every caller, however explicit the request.
+PROTECTION = "protection"
+
+#: A rule that declines to *guess*. Binding on a caller acting unprompted; not a
+#: safety refusal for one carrying an explicit request that names its target.
+RESTRAINT = "restraint"
+
+_LAYERS = (PROTECTION, RESTRAINT)
 
 
 @dataclass(frozen=True)
@@ -42,16 +73,25 @@ class Rule:
     Matching is set-based, so it is order-independent by construction. A rule
     requiring ``{"push", "--force"}`` fires on ``git push --force`` and equally
     on ``git --force push`` — a caller cannot reorder its way past a rule.
+
+    ``layer`` is PROTECTION or RESTRAINT and defaults to PROTECTION, so a rule
+    written without one is treated as an absolute — the strictest reading, and
+    the one that keeps a forgotten label from quietly weakening a guardrail.
     """
 
     action: str
     effect: str = DENY
     attributes: frozenset[str] = field(default_factory=frozenset)
     reason: str = ""
+    layer: str = PROTECTION
 
     def __post_init__(self) -> None:
         if self.effect not in (ALLOW, DENY):
             raise ValueError(f"effect must be {ALLOW!r} or {DENY!r}, got {self.effect!r}")
+        if self.layer not in _LAYERS:
+            raise ValueError(
+                f"layer must be {PROTECTION!r} or {RESTRAINT!r}, got {self.layer!r}"
+            )
         if not self.action:
             raise ValueError("rule action must not be empty")
         # Normalize so callers can pass any iterable and any casing of the action
@@ -131,3 +171,50 @@ def evaluate(
         rule=None,
         reason=f"{action!r} is not permitted by any rule (deny by default)",
     )
+
+
+def protection_only(policy: Policy) -> Policy:
+    """The safety-invariant subset of ``policy``: its PROTECTION rules alone.
+
+    Derived from the full policy rather than built alongside it. That is the
+    point — a protection rule cannot go missing from this subset by omission,
+    the way it could if two policies were assembled side by side and one
+    assembly forgot a line.
+
+    Dropping the restraint rules drops allow rules too if any carry that layer,
+    which is deliberate: deny-by-default still applies, so a subset that lost an
+    allow refuses more, never less.
+    """
+    return Policy(rules=tuple(r for r in policy.rules if r.layer == PROTECTION))
+
+
+def evaluate_layered(
+    action: str,
+    attributes: Iterable[str] = (),
+    *,
+    policy: Policy,
+) -> tuple[Decision, str | None]:
+    """Evaluate ``policy`` and say *which layer* refused: the pair every caller wants.
+
+    Returns ``(decision, layer)`` where ``layer`` is None when the request is
+    allowed outright, PROTECTION when a safety invariant refused it, and
+    RESTRAINT when it cleared every invariant and was refused only because the
+    policy declines to guess about it.
+
+    The protection subset is evaluated **first**, and that ordering is the whole
+    reason this function exists. :func:`evaluate` returns the first matching deny
+    in rule order, so a request matching a rule in each layer would otherwise be
+    classified by whichever rule the operator happened to write higher up the
+    file. A caller that honours only protection refusals would then be one
+    reordering away from letting an invariant through.
+
+    A refusal with no rule behind it — deny-by-default — is PROTECTION. It is the
+    fallthrough for requests the policy has no vocabulary for at all, and the
+    strictest reading is the only safe one to take of something unrecognised.
+    """
+    guarded = evaluate(action, attributes, policy=protection_only(policy))
+    if not guarded.allowed:
+        return guarded, PROTECTION
+
+    decision = evaluate(action, attributes, policy=policy)
+    return decision, (None if decision.allowed else RESTRAINT)

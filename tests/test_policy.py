@@ -7,7 +7,19 @@ from differently ordered policies; that redundancy is the point.
 
 import pytest
 
-from safety.policy import ALLOW, ANY_ACTION, DENY, Decision, Policy, Rule, evaluate
+from safety.policy import (
+    ALLOW,
+    ANY_ACTION,
+    DENY,
+    PROTECTION,
+    RESTRAINT,
+    Decision,
+    Policy,
+    Rule,
+    evaluate,
+    evaluate_layered,
+    protection_only,
+)
 
 # A small policy exercising the interesting overlaps: git is allowed in general
 # but force-push is denied, and "clean" sits on both sides to prove deny wins.
@@ -130,6 +142,90 @@ def test_wildcard_rule_matches_any_action():
     assert evaluate("ls", policy=p).allowed is True
     assert evaluate("ls", ["sudo"], policy=p).allowed is False
     assert evaluate("anything", ["sudo"], policy=p).allowed is False
+
+
+# --- layers ---------------------------------------------------------------
+
+# One action refused by a rule in each layer. The pair exists to prove the
+# classification does not depend on which of the two an operator wrote first.
+_GUARD = Rule(action="organize", effect=DENY, attributes={"symlink"},
+              reason="a symlink is not what it appears to be", layer=PROTECTION)
+_CAUTION = Rule(action="organize", effect=DENY, attributes={"ext:.exe"},
+                reason="installers are left alone", layer=RESTRAINT)
+_ALLOW_ORGANIZE = Rule(action="organize", effect=ALLOW, attributes={"file"},
+                       reason="files are organizable", layer=PROTECTION)
+
+
+def test_a_rule_is_a_protection_rule_unless_it_says_otherwise():
+    # The strictest reading. A forgotten label must not weaken a guardrail.
+    assert Rule(action="git", effect=DENY).layer == PROTECTION
+
+
+def test_an_unknown_layer_is_rejected():
+    with pytest.raises(ValueError, match="layer must be"):
+        Rule(action="git", effect=DENY, layer="advisory")
+
+
+def test_protection_only_drops_restraint_rules_and_keeps_the_rest():
+    subset = protection_only(Policy((_ALLOW_ORGANIZE, _GUARD, _CAUTION)))
+    assert subset.rules == (_ALLOW_ORGANIZE, _GUARD)
+
+
+def test_a_protection_refusal_is_reported_as_protection():
+    p = Policy((_ALLOW_ORGANIZE, _GUARD))
+    decision, layer = evaluate_layered("organize", {"symlink"}, policy=p)
+    assert (decision.allowed, layer) == (False, PROTECTION)
+
+
+def test_a_restraint_refusal_is_reported_as_restraint():
+    p = Policy((_ALLOW_ORGANIZE, _CAUTION))
+    decision, layer = evaluate_layered("organize", {"file", "ext:.exe"}, policy=p)
+    assert (decision.allowed, layer) == (False, RESTRAINT)
+    assert decision.reason == "installers are left alone"
+
+
+def test_an_allowed_request_has_no_layer():
+    p = Policy((_ALLOW_ORGANIZE, _GUARD, _CAUTION))
+    decision, layer = evaluate_layered("organize", {"file", "ext:.pdf"}, policy=p)
+    assert (decision.allowed, layer) == (True, None)
+
+
+@pytest.mark.parametrize(
+    "order",
+    [(_GUARD, _CAUTION), (_CAUTION, _GUARD)],
+    ids=["protection first", "restraint first"],
+)
+def test_matching_both_layers_reports_protection_whatever_the_rule_order(order):
+    """The reason this helper exists.
+
+    ``evaluate`` returns the first matching deny in rule order. A caller that
+    honours only protection refusals would otherwise be one reordering of
+    policy.toml away from letting a safety invariant through.
+    """
+    p = Policy((_ALLOW_ORGANIZE, *order))
+    decision, layer = evaluate_layered(
+        "organize", {"symlink", "ext:.exe"}, policy=p
+    )
+    assert layer == PROTECTION
+    assert decision.rule is _GUARD
+
+
+def test_deny_by_default_is_protection():
+    # Nothing matched at all. An unrecognised request is not something to be
+    # relaxed about, so the fallthrough takes the strictest layer.
+    decision, layer = evaluate_layered("organize", {"dir"}, policy=Policy())
+    assert (decision.allowed, decision.rule, layer) == (False, None, PROTECTION)
+
+
+def test_an_allow_that_only_the_full_policy_carries_does_not_leak_into_protection():
+    """A restraint-layered allow is dropped, and deny-by-default catches it.
+
+    The subset may refuse more than the full policy; it must never refuse less.
+    """
+    p = Policy((Rule(action="organize", effect=ALLOW, attributes={"dir"},
+                     layer=RESTRAINT),))
+    assert evaluate("organize", {"dir"}, policy=p).allowed is True
+    assert evaluate_layered("organize", {"dir"}, policy=p)[1] == PROTECTION
 
 
 # --- rule validation ------------------------------------------------------
