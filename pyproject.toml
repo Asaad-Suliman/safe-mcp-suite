@@ -3,6 +3,12 @@ name = "safe-mcp-suite"
 version = "0.1.0"
 description = "Safe MCP suite"
 requires-python = ">=3.12"
+# The only third-party dependency in the project, and it stops at the servers:
+# safety/ imports nothing outside the standard library and must stay that way.
+dependencies = ["mcp>=2.0"]
+
+[project.scripts]
+safe-mcp-terminal = "servers.terminal.server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
