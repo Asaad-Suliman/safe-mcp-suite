@@ -50,9 +50,13 @@ __all__ = [
 ]
 
 #: The policy action every file question is asked under. One action, because a
-#: file server has one verb worth gating: may this thing be moved by the
-#: organizer at all? Tool names stay out of it — ``move_file`` and ``apply_plan``
-#: ask the same question about the same file and must get the same answer.
+#: file server has one verb worth gating: may this thing be moved at all? Tool
+#: names stay out of it — ``move_file`` and ``apply_plan`` ask the *same question*
+#: about the same file, and a rule cannot be written to fire for one and not the
+#: other. What differs is which of the two rule layers a tool may act on, and
+#: that is decided in ``server.py``, per tool, from the layer ``safety.policy``
+#: reports back. Keeping it there means a tool cannot quietly acquire a narrower
+#: view of the rules by asking a different question.
 ACTION = "organize"
 
 # --- the attribute vocabulary ----------------------------------------------
