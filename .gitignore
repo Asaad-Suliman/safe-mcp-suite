@@ -28,3 +28,4 @@ audit/
 *.swp
 .DS_Store
 PHASE*_PROGRESS.md
+uv.lock
