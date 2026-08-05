@@ -17,9 +17,12 @@ it is absent: no argument, no config key, and no policy rule produces one.
 Three properties are structural rather than conventional:
 
 * **Nothing moves before a decision exists.** Every mutating tool evaluates
-  ``safety.policy`` first, and the same file gets the same answer whichever tool
-  asked — ``move_file`` cannot be used to relocate something ``plan_organize``
-  would have skipped.
+  ``safety.policy`` first, and every tool asks the *same question about the same
+  file*. What differs is which of the two rule layers a tool may act on:
+  ``plan_organize`` walks the workspace unprompted and so obeys both, while
+  ``move_file`` carries a request naming one specific file and so obeys the
+  PROTECTION layer only. No tool can reach past PROTECTION, and no phrasing of a
+  request creates a tool that can.
 * **Nothing applies without having been planned.** ``apply.apply_plan`` takes a
   ``Plan`` value, and only ``plan.build`` makes one. A client sends a plan *id*
   and this module looks it up; there is no argument that conjures a plan.
@@ -48,7 +51,7 @@ from safety.audit import (
     utc_now,
 )
 from safety.paths import PathJail
-from safety.policy import evaluate
+from safety.policy import PROTECTION, Decision, evaluate_layered
 from safety.redact import build_patterns, make_redactor
 from safety.result import OperationResult, ResultCode, failed, succeeded
 from servers.files import apply as apply_module
@@ -266,8 +269,24 @@ def _finish(
 # --- shared helpers ---------------------------------------------------------
 
 
-def _decide(ctx: _Context, facts: inspect.FileFacts):
-    return evaluate(inspect.ACTION, facts.attributes, policy=ctx.config.policy)
+def _decide(ctx: _Context, facts: inspect.FileFacts) -> tuple[Decision, str | None]:
+    """Ask the policy about one file, and get back *which layer* answered.
+
+    Every tool asks the same question of the same file. What differs is which
+    layers a tool is entitled to act on, and that is a property of the tool, not
+    of the file — so the split lives at the two call sites below, and the layer
+    never gets flattened away before it reaches them.
+    """
+    return evaluate_layered(inspect.ACTION, facts.attributes, policy=ctx.config.policy)
+
+
+def _refusal_code(layer: str | None) -> ResultCode:
+    """The code a refusal at ``layer`` reports."""
+    return (
+        ResultCode.POLICY_DENIED
+        if layer == PROTECTION
+        else ResultCode.NEEDS_EXPLICIT_REQUEST
+    )
 
 
 def _replay(
@@ -361,13 +380,17 @@ def list_files(subdir: str | None = None) -> OperationResult:
             except OSError as exc:
                 entries.append({"name": path.name, "error": f"could not inspect: {exc}"})
                 continue
-            decision = _decide(ctx, facts)
+            decision, layer = _decide(ctx, facts)
             entries.append(
                 {
                     "name": facts.name,
                     "size": facts.size,
                     "category": facts.category,
                     "organizable": decision.allowed,
+                    # Which kind of "no" this is. Without it an installer and a
+                    # symlink both read as organizable: false, and only one of
+                    # them would move if move_file were asked for it by name.
+                    "code": "" if decision.allowed else _refusal_code(layer).value,
                     "reason": "" if decision.allowed else decision.reason,
                 }
             )
@@ -470,11 +493,19 @@ def move_file(src: str, dest: str) -> OperationResult:
     ``dest`` is the full destination path including the filename, not a folder —
     ``move_file("report.pdf", "Documents/report.pdf")``. Missing parent folders
     are created. A destination that already exists is refused rather than
-    overwritten, and no numbered variant is invented for it.
+    overwritten, and no numbered variant is invented for it. A directory may be
+    moved, as one rename; its contents come with it and are not re-filed.
 
-    The same policy that governs ``plan_organize`` governs this: a file the
-    organizer would skip cannot be moved here either, so the two tools cannot
-    disagree about the same file. Directories and symlinks are not movable.
+    This names one file, so it is not guessing, and the rules that exist only to
+    stop the organizer guessing do not apply: an installer, a dotfile, an
+    application folder or a plain directory all move if you ask for them by name.
+    ``plan_organize`` still leaves every one of them alone, and reports them as
+    NEEDS_EXPLICIT_REQUEST — which is a pointer to this tool.
+
+    The safety rules are untouched and are not negotiable here: a path that
+    escapes the workspace, a symlink, a name carrying control characters, and an
+    occupied destination are all still refused, with POLICY_DENIED or
+    PATH_ESCAPE. There is no phrasing of a request that gets past them.
     """
 
     def handler(ctx: _Context) -> OperationResult:
@@ -505,8 +536,13 @@ def move_file(src: str, dest: str) -> OperationResult:
                 ResultCode.OPERATION_FAILED, ctx.tool, f"source not found: {src!r}"
             )
 
-        decision = _decide(ctx, facts)
-        if not decision.allowed:
+        # Protection only. A restraint rule exists because filing this file
+        # *automatically* would be a guess, and there is no guess here — the
+        # caller named this file and this destination. Refusing it would not be
+        # safety, it would be the organizer's caution applied to a decision
+        # somebody already made.
+        decision, layer = _decide(ctx, facts)
+        if layer == PROTECTION:
             ctx.audit.record(
                 _record(
                     ctx=ctx,
@@ -519,7 +555,16 @@ def move_file(src: str, dest: str) -> OperationResult:
             )
             return failed(ResultCode.POLICY_DENIED, ctx.tool, decision.reason)
 
-        ctx.attempt(reason=decision.reason)
+        # The trail says when a restraint was passed over, and which one. That a
+        # file the organizer would have left alone was moved on request is
+        # exactly the thing a reviewer wants to find written down.
+        ctx.attempt(
+            reason=(
+                f"moved by explicit request over a restraint rule: {decision.reason}"
+                if not decision.allowed
+                else decision.reason
+            )
+        )
 
         result = apply_module.move_one(src, dest, jail=ctx.jail, action=ctx.tool)
         if not result.ok:

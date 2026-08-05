@@ -344,10 +344,12 @@ def test_a_plan_cannot_be_applied_twice(wired) -> None:
     assert server.apply_plan(plan_id).code is ResultCode.INVALID_REQUEST
 
 
-# --- the shipped policy's own refusals --------------------------------------
+# --- the shipped policy's two layers ----------------------------------------
 
-
-SHIPPED_REFUSALS = [
+# Files the shipped policy declines to file *automatically*. None of these is a
+# safety matter, so each one moves when a request names it — and the organizer
+# still leaves every one of them where it is.
+SHIPPED_RESTRAINTS = [
     ("setup.exe", "installers"),
     ("installer.msi", "installers"),
     ("script.bat", "installers"),
@@ -360,15 +362,68 @@ SHIPPED_REFUSALS = [
 
 
 @pytest.mark.parametrize(
-    ("name", "why"), SHIPPED_REFUSALS, ids=[f"{n}: {w}" for n, w in SHIPPED_REFUSALS]
+    ("name", "why"),
+    SHIPPED_RESTRAINTS,
+    ids=[f"{n}: {w}" for n, w in SHIPPED_RESTRAINTS],
 )
-def test_the_shipped_policy_never_moves_these(
+def test_the_shipped_policy_never_organizes_these_unprompted(
     wired, nothing_may_move, name: str, why: str
 ) -> None:
+    """The organizer is guessing, so it declines — and reaches no rename."""
+    wired.make(name)
+    plan = server.plan_organize().detail
+
+    assert name not in [m["src"] for m in plan["moves"]], f"{name} was proposed ({why})"
+    skip = next(s for s in plan["skips"] if s["name"] == name)
+    assert skip["code"] == "NEEDS_EXPLICIT_REQUEST"
+
+
+@pytest.mark.parametrize(
+    ("name", "why"),
+    SHIPPED_RESTRAINTS,
+    ids=[f"{n}: {w}" for n, w in SHIPPED_RESTRAINTS],
+)
+def test_the_shipped_policy_moves_these_when_a_request_names_them(
+    wired, name: str, why: str
+) -> None:
+    """No tripwire here: reaching a rename is the expected outcome.
+
+    A restraint rule stops the organizer guessing. It is not a lock, and
+    treating it as one would mean a user could not move their own installer
+    with a tool whose entire job is moving files.
+    """
     wired.make(name)
     result = server.move_file(name, f"Documents/{name}")
-    assert result.ok is False, f"{name} was moved ({why})"
+
+    assert result.ok is True, f"{name} was refused on a restraint rule ({why})"
+    assert (wired.root / "Documents" / name).exists()
+
+
+# Files and shapes the shipped policy refuses outright. No phrasing gets past
+# these, and none of them may reach a rename.
+def test_the_shipped_policy_never_moves_a_symlink(wired, nothing_may_move) -> None:
+    (wired.root / "link.pdf").symlink_to(wired.elsewhere / "target.pdf")
+    result = server.move_file("link.pdf", "Documents/link.pdf")
     assert result.code is ResultCode.POLICY_DENIED
+
+
+def test_the_shipped_policy_never_moves_a_control_character_name(
+    wired, nothing_may_move
+) -> None:
+    wired.make("in\x0bvoice.pdf")
+    result = server.move_file("in\x0bvoice.pdf", "Documents/invoice.pdf")
+    assert result.code is ResultCode.POLICY_DENIED
+
+
+def test_a_protection_refusal_is_not_reported_as_a_restraint(wired) -> None:
+    """The codes must not blur: one of these is an invitation, the other is not."""
+    wired.make("setup.exe")
+    (wired.root / "link.pdf").symlink_to(wired.elsewhere / "target.pdf")
+
+    skips = {s["name"]: s["code"] for s in server.plan_organize().detail["skips"]}
+
+    assert skips["setup.exe"] == "NEEDS_EXPLICIT_REQUEST"
+    assert skips["link.pdf"] == "POLICY_DENIED"
 
 
 def test_the_shipped_policy_still_organizes_ordinary_files(wired) -> None:
@@ -382,6 +437,64 @@ def test_the_shipped_policy_still_organizes_ordinary_files(wired) -> None:
     assert (wired.root / "Documents" / "report.pdf").exists()
     assert (wired.root / "Images" / "photo.png").exists()
     assert (wired.root / "Audio" / "song.mp3").exists()
+
+
+# --- moving a directory -----------------------------------------------------
+
+
+def test_a_directory_move_is_journalled_and_undoes_cleanly(wired) -> None:
+    """A directory is one rename, and the undo path knows nothing else about it.
+
+    Worth proving end to end rather than assuming: undo replays the recorded
+    move backwards through the same single mover, so if a directory were
+    recorded differently from a file the reversal would be where it showed up.
+    """
+    (wired.root / "project").mkdir()
+    (wired.root / "project" / "notes.md").write_text("notes")
+    (wired.root / "project" / "nested").mkdir()
+    (wired.root / "project" / "nested" / "deep.txt").write_text("deep")
+
+    moved = server.move_file("project", "Archive/project")
+    assert moved.ok is True
+    assert moved.detail["src"] == "project"
+    assert moved.detail["dest"] == "Archive/project"
+
+    undone = server.undo_last_action()
+
+    assert undone.ok is True
+    assert (wired.root / "project" / "notes.md").read_text() == "notes"
+    assert (wired.root / "project" / "nested" / "deep.txt").read_text() == "deep"
+    assert not (wired.root / "Archive" / "project").exists()
+
+
+def test_a_directory_move_redoes_after_being_undone(wired) -> None:
+    (wired.root / "project").mkdir()
+    (wired.root / "project" / "notes.md").write_text("notes")
+
+    server.move_file("project", "Archive/project")
+    server.undo_last_action()
+    redone = server.redo_last_action()
+
+    assert redone.ok is True
+    assert (wired.root / "Archive" / "project" / "notes.md").read_text() == "notes"
+    assert not (wired.root / "project").exists()
+
+
+def test_an_undone_directory_is_not_overwritten_on_the_way_back(wired) -> None:
+    """Nothing is merged or clobbered to make room for a restored directory."""
+    (wired.root / "project").mkdir()
+    (wired.root / "project" / "notes.md").write_text("mine")
+    server.move_file("project", "Archive/project")
+
+    # Someone recreated the name in the meantime.
+    (wired.root / "project").mkdir()
+    (wired.root / "project" / "notes.md").write_text("theirs")
+
+    result = server.undo_last_action()
+
+    assert result.ok is False
+    assert (wired.root / "project" / "notes.md").read_text() == "theirs"
+    assert (wired.root / "Archive" / "project" / "notes.md").read_text() == "mine"
 
 
 # --- there is no delete -----------------------------------------------------

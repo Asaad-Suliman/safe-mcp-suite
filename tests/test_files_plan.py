@@ -13,18 +13,18 @@ from pathlib import Path
 import pytest
 
 from safety.paths import PathJail
-from safety.policy import ALLOW, DENY, Policy, Rule
+from safety.policy import DENY, PROTECTION, RESTRAINT, Policy, Rule
 from safety.result import ResultCode
 from servers.files import inspect
+from servers.files.config import BASE_RULES
 from servers.files.plan import Plan, build, verify
 
 CATEGORIES = {".pdf": "Documents", ".png": "Images", ".mp3": "Audio"}
 
-# The shape config produces: files are organizable, everything else falls to
-# deny-by-default.
-BASE_POLICY = Policy(
-    rules=(Rule(action=inspect.ACTION, effect=ALLOW, attributes=frozenset({"file"})),)
-)
+# The rules config actually generates, imported rather than restated. A local
+# copy would let this file keep testing a policy shape the loader had stopped
+# producing, which is the failure mode these tests exist to catch.
+BASE_POLICY = Policy(rules=BASE_RULES)
 
 
 def workspace(tmp_path: Path, *names: str) -> PathJail:
@@ -119,14 +119,35 @@ def test_planning_does_not_touch_file_contents_or_mtimes(tmp_path: Path) -> None
 # --- skips ------------------------------------------------------------------
 
 
-def test_a_directory_is_skipped_by_deny_by_default(tmp_path: Path) -> None:
+def test_a_directory_is_never_proposed_and_is_skipped_as_a_restraint(
+    tmp_path: Path,
+) -> None:
+    """The organizer has no extension to file a folder by, so it does not guess.
+
+    Restraint rather than protection: move_file will move the same directory
+    when a request names it, and the code is what says so.
+    """
     jail = workspace(tmp_path, "a.pdf")
     (jail.root / "Documents").mkdir()
 
     plan = plan_for(jail)
 
     assert [s.name for s in plan.skips] == ["Documents"]
+    assert plan.skips[0].code is ResultCode.NEEDS_EXPLICIT_REQUEST
     assert len(plan.moves) == 1
+
+
+def test_a_directory_with_a_categorised_extension_is_still_not_proposed(
+    tmp_path: Path,
+) -> None:
+    """An application folder is a directory. The extension does not make it a file."""
+    jail = workspace(tmp_path)
+    (jail.root / "album.pdf").mkdir()
+
+    plan = plan_for(jail)
+
+    assert plan.moves == ()
+    assert plan.skips[0].code is ResultCode.NEEDS_EXPLICIT_REQUEST
 
 
 def test_a_symlink_is_skipped_and_never_followed(tmp_path: Path) -> None:
@@ -137,8 +158,10 @@ def test_a_symlink_is_skipped_and_never_followed(tmp_path: Path) -> None:
 
     plan = plan_for(jail)
 
-    assert "link.pdf" in [s.name for s in plan.skips]
+    skip = next(s for s in plan.skips if s.name == "link.pdf")
     assert [m.src.name for m in plan.moves] == ["real.pdf"]
+    # Protection, not restraint: there is no way of asking that moves this one.
+    assert skip.code is ResultCode.POLICY_DENIED
 
 
 def test_a_policy_denial_is_reported_with_its_reason(tmp_path: Path) -> None:
@@ -151,6 +174,7 @@ def test_a_policy_denial_is_reported_with_its_reason(tmp_path: Path) -> None:
                 effect=DENY,
                 attributes=frozenset({"ext:.exe"}),
                 reason="installers are left alone",
+                layer=RESTRAINT,
             ),
         )
     )
@@ -161,6 +185,48 @@ def test_a_policy_denial_is_reported_with_its_reason(tmp_path: Path) -> None:
     skip = next(s for s in plan.skips if s.name == "setup.exe")
     assert skip.reason == "installers are left alone"
     assert skip.rule == inspect.ACTION
+    assert skip.code is ResultCode.NEEDS_EXPLICIT_REQUEST
+
+
+def test_a_skip_carries_the_layer_of_the_rule_that_caused_it(tmp_path: Path) -> None:
+    """Two rules, same shape, different layers. Only the layer differs downstream."""
+    jail = workspace(tmp_path, "setup.exe", "secret.pdf")
+    policy = Policy(
+        rules=BASE_POLICY.rules
+        + (
+            Rule(action=inspect.ACTION, effect=DENY, layer=RESTRAINT,
+                 attributes=frozenset({"ext:.exe"}), reason="not guessing"),
+            Rule(action=inspect.ACTION, effect=DENY, layer=PROTECTION,
+                 attributes=frozenset({"name:secret.pdf"}), reason="never"),
+        )
+    )
+
+    codes = {s.name: s.code for s in plan_for(jail, policy).skips}
+
+    assert codes["setup.exe"] is ResultCode.NEEDS_EXPLICIT_REQUEST
+    assert codes["secret.pdf"] is ResultCode.POLICY_DENIED
+
+
+def test_a_protection_rule_wins_over_a_restraint_rule_on_the_same_file(
+    tmp_path: Path,
+) -> None:
+    """A file both rules match is forbidden, not merely un-guessed at.
+
+    The reverse would be a bypass: report it as a restraint and a caller acting
+    on that report would try move_file, which honours protection only.
+    """
+    jail = workspace(tmp_path, "setup.exe")
+    policy = Policy(
+        rules=BASE_POLICY.rules
+        + (
+            Rule(action=inspect.ACTION, effect=DENY, layer=RESTRAINT,
+                 attributes=frozenset({"ext:.exe"}), reason="not guessing"),
+            Rule(action=inspect.ACTION, effect=DENY, layer=PROTECTION,
+                 attributes=frozenset({"name:setup.exe"}), reason="never"),
+        )
+    )
+
+    assert plan_for(jail, policy).skips[0].code is ResultCode.POLICY_DENIED
 
 
 def test_an_existing_destination_is_skipped_at_plan_time(tmp_path: Path) -> None:

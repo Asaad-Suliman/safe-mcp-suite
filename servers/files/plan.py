@@ -6,6 +6,12 @@ each entry, and returns a list of moves it *would* make. The reference organizer
 had no such split: ``organize_workspace()`` decided and moved in the same pass, so
 the only way to find out what it would do was to let it do it.
 
+This is the tool that acts on its own initiative — nothing it does was asked for
+file by file — so it is the one that enforces **both** rule layers. Every skip it
+reports carries the layer that produced it, because "the organizer will not guess
+about this" and "this is forbidden" lead to different next steps for the caller,
+and the only other way to tell them apart would be to attempt the move.
+
 The type is the enforcement. ``apply.apply_plan`` takes a :class:`Plan` value, and
 :func:`build` is the only thing that constructs one. A client speaks JSON and
 cannot fabricate a ``Plan``, so there is no route from raw client input to a move
@@ -30,7 +36,7 @@ from pathlib import Path
 
 from safety.audit import utc_now
 from safety.paths import PathJail
-from safety.policy import Policy, evaluate
+from safety.policy import PROTECTION, Policy, evaluate_layered
 from safety.result import OperationResult, ResultCode, failed
 from servers.files import inspect
 
@@ -67,14 +73,27 @@ class Move:
 
 @dataclass(frozen=True)
 class Skip:
-    """One entry the plan deliberately left alone, and why."""
+    """One entry the plan deliberately left alone, why, and how firmly.
+
+    ``code`` is what separates "this is forbidden" from "the organizer will not
+    guess about this". A NEEDS_EXPLICIT_REQUEST skip is an invitation: name the
+    file to ``move_file`` and it moves. A POLICY_DENIED skip is not, and trying
+    it through the other tool will fail the same way. Without the distinction a
+    caller could only tell the two apart by attempting the move.
+    """
 
     name: str
     reason: str
+    code: ResultCode
     rule: str | None = None
 
     def describe(self) -> dict[str, object]:
-        return {"name": self.name, "reason": self.reason, "rule": self.rule}
+        return {
+            "name": self.name,
+            "reason": self.reason,
+            "code": self.code.value,
+            "rule": self.rule,
+        }
 
 
 @dataclass(frozen=True)
@@ -136,15 +155,32 @@ def build(
         except OSError as exc:
             # The tree changed under the walk. One unreadable entry is not a
             # reason to refuse the other ninety-nine.
-            skips.append(Skip(name=path.name, reason=f"could not inspect: {exc}"))
+            skips.append(
+                Skip(
+                    name=path.name,
+                    reason=f"could not inspect: {exc}",
+                    code=ResultCode.OPERATION_FAILED,
+                )
+            )
             continue
 
-        decision = evaluate(inspect.ACTION, facts.attributes, policy=policy)
+        # Both layers, because this tool is the one acting on its own initiative:
+        # nothing here names a file, so every restraint rule applies. The layer is
+        # reported rather than flattened away, so a caller can see which skips
+        # would move if it asked for them by name.
+        decision, layer = evaluate_layered(
+            inspect.ACTION, facts.attributes, policy=policy
+        )
         if not decision.allowed:
             skips.append(
                 Skip(
                     name=facts.name,
                     reason=decision.reason,
+                    code=(
+                        ResultCode.POLICY_DENIED
+                        if layer == PROTECTION
+                        else ResultCode.NEEDS_EXPLICIT_REQUEST
+                    ),
                     rule=decision.rule.action if decision.rule is not None else None,
                 )
             )
@@ -164,6 +200,7 @@ def build(
                         f"destination for category {facts.category!r} "
                         "escapes the workspace"
                     ),
+                    code=ResultCode.PATH_ESCAPE,
                 )
             )
             continue
@@ -177,6 +214,7 @@ def build(
                     reason=(
                         f"destination already exists: {dest.relative_to(root)}"
                     ),
+                    code=ResultCode.OPERATION_FAILED,
                 )
             )
             continue

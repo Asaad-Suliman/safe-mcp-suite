@@ -316,20 +316,89 @@ def test_move_file_refuses_an_existing_destination(env) -> None:
     assert (env.workspace / "Documents" / "a.pdf").read_text() == "original"
 
 
-def test_move_file_obeys_the_same_policy_as_the_organizer(env) -> None:
-    """The two tools must not disagree about the same file."""
+# --- what a restraint rule does and does not stop ----------------------------
+
+
+def test_the_organizer_skips_an_installer_but_move_file_moves_it(env) -> None:
+    """The whole distinction, in one test.
+
+    Same file, same policy, two tools. The organizer is guessing where an
+    installer belongs and declines to. A request naming it is not guessing, so
+    there is nothing left for the rule to protect anyone from.
+    """
     env.make("setup.exe")
+
+    plan = server.plan_organize()
+    skip = next(s for s in plan.detail["skips"] if s["name"] == "setup.exe")
+    assert skip["code"] == "NEEDS_EXPLICIT_REQUEST"
+
     result = server.move_file("setup.exe", "Documents/setup.exe")
 
-    assert result.code is ResultCode.POLICY_DENIED
-    assert result.reason == "installers are left alone"
-    assert (env.workspace / "setup.exe").exists()
+    assert result.ok is True
+    assert (env.workspace / "Documents" / "setup.exe").exists()
+    assert not (env.workspace / "setup.exe").exists()
 
 
-def test_move_file_cannot_move_a_directory(env) -> None:
+def test_move_file_moves_a_hidden_file(env) -> None:
+    env.make(".bashrc")
+    result = server.move_file(".bashrc", "Documents/.bashrc")
+    assert result.ok is True
+    assert (env.workspace / "Documents" / ".bashrc").exists()
+
+
+def test_move_file_can_move_a_directory(env) -> None:
+    """One rename. The contents come along and are not re-filed."""
     (env.workspace / "somedir").mkdir()
-    result = server.move_file("somedir", "Documents/somedir")
+    (env.workspace / "somedir" / "inner.pdf").write_text("inner")
+
+    result = server.move_file("somedir", "Archive/somedir")
+
+    assert result.ok is True
+    assert (env.workspace / "Archive" / "somedir" / "inner.pdf").read_text() == "inner"
+    assert not (env.workspace / "somedir").exists()
+
+
+def test_move_file_can_move_an_application_folder(env) -> None:
+    (env.workspace / "Editor.app").mkdir()
+    (env.workspace / "Editor.app" / "run").write_text("#!/bin/sh")
+
+    result = server.move_file("Editor.app", "Applications/Editor.app")
+
+    assert result.ok is True
+    assert (env.workspace / "Applications" / "Editor.app" / "run").exists()
+
+
+def test_a_restraint_that_was_passed_over_is_written_down(env) -> None:
+    """A reviewer should be able to find this in the trail, not infer it."""
+    env.make("setup.exe")
+    server.move_file("setup.exe", "Documents/setup.exe")
+
+    attempt = next(r for r in env.records() if r["record_type"] == "attempt")
+    assert "over a restraint rule" in attempt["reason"]
+    assert "installers are left alone" in attempt["reason"]
+
+
+def test_a_directory_move_still_refuses_an_occupied_destination(env) -> None:
+    """A directory gets every protection check a file gets. Nothing is merged."""
+    (env.workspace / "somedir").mkdir()
+    (env.workspace / "somedir" / "a.pdf").write_text("mine")
+    (env.workspace / "Archive" / "somedir").mkdir(parents=True)
+    (env.workspace / "Archive" / "somedir" / "b.pdf").write_text("theirs")
+
+    result = server.move_file("somedir", "Archive/somedir")
+
+    assert result.code is ResultCode.OPERATION_FAILED
+    assert (env.workspace / "somedir" / "a.pdf").exists()
+    assert (env.workspace / "Archive" / "somedir" / "b.pdf").read_text() == "theirs"
+
+
+def test_move_file_refuses_a_name_carrying_control_characters(env) -> None:
+    """Protection, not restraint. No way of asking makes this one permitted."""
+    env.make("bad\x07name.pdf")
+    result = server.move_file("bad\x07name.pdf", "Documents/bad\x07name.pdf")
+
     assert result.code is ResultCode.POLICY_DENIED
+    assert (env.workspace / "bad\x07name.pdf").exists()
 
 
 def test_move_file_cannot_move_a_symlink(env, tmp_path: Path) -> None:
@@ -526,8 +595,10 @@ def test_a_refusal_is_recorded(env) -> None:
 
 
 def test_a_policy_denial_records_the_decision(env) -> None:
-    env.make("setup.exe")
-    server.move_file("setup.exe", "Documents/setup.exe")
+    # A named protection rule rather than a symlink, which is refused by
+    # deny-by-default and so has no rule to record.
+    env.make("bad\x07name.pdf")
+    server.move_file("bad\x07name.pdf", "Documents/bad\x07name.pdf")
 
     denial = next(r for r in env.records() if r["code"] == "POLICY_DENIED")
     assert denial["decision"] == "deny"
@@ -536,8 +607,8 @@ def test_a_policy_denial_records_the_decision(env) -> None:
 
 def test_a_denied_move_writes_no_attempt_record(env) -> None:
     """Nothing was about to happen, so nothing should claim it was."""
-    env.make("setup.exe")
-    server.move_file("setup.exe", "Documents/setup.exe")
+    (env.workspace / "link.pdf").symlink_to(env.workspace / "wherever.pdf")
+    server.move_file("link.pdf", "Documents/link.pdf")
     assert all(r["record_type"] == "outcome" for r in env.records())
 
 
