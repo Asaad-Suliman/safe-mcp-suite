@@ -21,6 +21,7 @@ from __future__ import annotations
 import shlex
 from dataclasses import dataclass
 
+from safety.patterns import SHELL_METACHARACTERS, first_match
 from safety.result import OperationResult, ResultCode, failed
 
 __all__ = ["ACTION", "METACHARACTERS", "ParsedCommand", "parse"]
@@ -28,13 +29,11 @@ __all__ = ["ACTION", "METACHARACTERS", "ParsedCommand", "parse"]
 #: Action name used on results produced by this module.
 ACTION = "parse_command"
 
-# Shell control operators. Their presence means the caller is trying to chain,
-# redirect, or substitute — none of which survives ``shell=False`` anyway, so a
-# command containing one is either a mistake or an injection attempt. Rejecting
-# it here means such input never reaches allow/deny evaluation at all.
-#
-# `||` and `&&` are covered by `|` and `&`; `$(` covers command substitution.
-METACHARACTERS: tuple[str, ...] = (";", "|", "&", "<", ">", "`", "$(")
+#: The operators this module rejects. Defined in :mod:`safety.patterns` because
+#: the file server scans names with the same function; re-exported under the
+#: terminal's own name so callers here need not know where it lives. Rejecting a
+#: command that contains one means such input never reaches allow/deny evaluation.
+METACHARACTERS: tuple[str, ...] = SHELL_METACHARACTERS
 
 
 @dataclass(frozen=True)
@@ -61,10 +60,7 @@ def _find_metacharacter(raw: str) -> str | None:
     # smuggles an operator past a scan that ignores quoting. Upgrade path is a
     # quote-aware scanner (walk shlex tokens instead of the raw string), and it
     # is only worth it if legitimate quoted metacharacters actually show up.
-    for meta in METACHARACTERS:
-        if meta in raw:
-            return meta
-    return None
+    return first_match(raw, METACHARACTERS)
 
 
 def parse(raw: str) -> ParsedCommand | OperationResult:
