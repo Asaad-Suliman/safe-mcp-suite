@@ -34,6 +34,8 @@ Three properties are structural rather than conventional:
 
 from __future__ import annotations
 
+import argparse
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -56,7 +58,7 @@ from safety.redact import build_patterns, make_redactor
 from safety.result import OperationResult, ResultCode, failed, succeeded
 from servers.files import apply as apply_module
 from servers.files import inspect, plan as plan_module
-from servers.files.config import ConfigError, FilesConfig
+from servers.files.config import ConfigError, ENV_POLICY_FILE, FilesConfig
 from servers.files.config import load as load_config
 from servers.files.journal import Journal, JournalEntry, JournalError, JournalMove
 
@@ -652,10 +654,35 @@ def _fatal(message: str) -> None:
     raise SystemExit(1)
 
 
-def main() -> None:
-    """Console entry point: load config, refuse loudly if unsafe, then serve."""
+def main(argv: list[str] | None = None) -> None:
+    """Console entry point: load config, refuse loudly if unsafe, then serve.
+
+    ``argv`` is the argument list the CLI was called with (not ``sys.argv``),
+    so both ``servers.cli`` and tests can drive it directly. ``--config``
+    names the policy file explicitly; ``SAFE_MCP_POLICY_FILE`` remains
+    supported for deployments that prefer an environment variable. Neither
+    supplied is a startup refusal rather than a silent fall back to whatever
+    ``policy.toml`` happens to be in the working directory — that ambient
+    default is exactly what made the documented Quickstart path depend on
+    state nothing guaranteed.
+    """
+    parser = argparse.ArgumentParser(prog=f"safe-mcp {SERVER_NAME}")
+    parser.add_argument("--config", help="path to policy.toml")
+    # ``argv or []`` rather than letting argparse default to ``None``: a bare
+    # ``None`` makes argparse read the real process ``sys.argv``, which is
+    # wrong for a direct call (tests, ``python -m servers.files.server``)
+    # that means "no extra CLI args" rather than "inherit the caller's".
+    config_path = parser.parse_args(argv or []).config or os.environ.get(ENV_POLICY_FILE)
+
+    if not config_path:
+        _fatal(
+            f"no policy file configured. Pass --config PATH or set {ENV_POLICY_FILE}. "
+            "There is no default: a policy file nobody chose is not a policy."
+        )
+        return
+
     try:
-        config = load_config()
+        config = load_config(config_path)
     except ConfigError as exc:
         _fatal(f"could not load policy: {exc}")
         return

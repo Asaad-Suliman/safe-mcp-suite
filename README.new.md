@@ -25,16 +25,43 @@ allows it, and every decision is audited before the caller finds out what it was
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
+Both servers take their policy file as an explicit `--config PATH` argument.
+There's no default `policy.toml` lookup and nothing reads a `.env` file —
+`uv run` doesn't load one on its own, so a value that lives only there is a
+value the server never sees. `--config` (or the `SAFE_MCP_POLICY_FILE`
+environment variable, which still works and still wins over nothing) is the
+one path that's actually guaranteed.
+
 ```sh
 git clone https://github.com/Asaad-Suliman/safe-mcp-suite.git safe-mcp-suite
 cd safe-mcp-suite
 uv sync
-cp .env.example .env
-# edit .env: set SAFE_MCP_JAIL_ROOT and SAFE_MCP_WORKSPACE_ROOT to real,
-# separate directories — both are required, neither has a default
-uv run safe-mcp terminal
-uv run safe-mcp files
+mkdir -p sandbox inbox state
+cat > my-policy.toml <<EOF
+audit_log = "$PWD/state/audit.jsonl"
+
+[terminal]
+jail_root = "$PWD/sandbox"
+[terminal.allowlist]
+commands = ["ls", "cat", "echo", "pwd"]
+
+[files]
+workspace_root = "$PWD/inbox"
+journal = "$PWD/state/organizer-journal.json"
+[files.categories]
+Documents = [".pdf", ".txt", ".md"]
+Images = [".jpg", ".png"]
+EOF
+uv run safe-mcp terminal --config my-policy.toml
+uv run safe-mcp files --config my-policy.toml
 ```
+
+`jail_root` and `workspace_root` are still required, here or via
+`SAFE_MCP_JAIL_ROOT` / `SAFE_MCP_WORKSPACE_ROOT` — that hasn't changed.
+`audit_log` and `journal` need to be outside the directory they're paired
+with (a permitted command could otherwise read or forge its own audit
+trail), which is why they're written as absolute paths under `state/` above
+rather than left at their relative defaults.
 
 Register with an MCP client, for example:
 
@@ -44,16 +71,27 @@ Register with an MCP client, for example:
     "safe-mcp terminal": {
       "command": "uv",
       "args": ["run", "safe-mcp", "terminal"],
-      "env": { "SAFE_MCP_JAIL_ROOT": "/srv/safe-mcp/sandbox" }
+      "env": {
+        "SAFE_MCP_POLICY_FILE": "/srv/safe-mcp/policy.toml",
+        "SAFE_MCP_JAIL_ROOT": "/srv/safe-mcp/sandbox"
+      }
     },
     "safe-mcp files": {
       "command": "uv",
       "args": ["run", "safe-mcp", "files"],
-      "env": { "SAFE_MCP_WORKSPACE_ROOT": "/srv/safe-mcp/inbox" }
+      "env": {
+        "SAFE_MCP_POLICY_FILE": "/srv/safe-mcp/policy.toml",
+        "SAFE_MCP_WORKSPACE_ROOT": "/srv/safe-mcp/inbox"
+      }
     }
   }
 }
 ```
+
+An MCP client sets `env` on the child process directly rather than reading
+a `.env` file, so it never had the ambient-state problem the Quickstart did
+— but `SAFE_MCP_POLICY_FILE` is now required there too, since startup no
+longer falls back to a `policy.toml` in the working directory.
 
 ## Demo
 
@@ -437,19 +475,30 @@ when = ["unsafe-name"]
 reason = "..."
 ```
 
-Environment variables (every one overrides the matching `policy.toml` key):
+The policy file itself has no default location. Point at it with `--config`:
+
+```sh
+safe-mcp terminal --config /path/to/policy.toml
+safe-mcp files --config /path/to/policy.toml
+```
+
+Environment variables remain supported and every one overrides the matching
+`policy.toml` key. `SAFE_MCP_POLICY_FILE` is the one exception worth calling
+out: it's an alternative to `--config`, not an override of it — `--config`
+wins if both are given, and startup refuses if neither is.
 
 | Variable                   | Meaning                                                                  | Default                  |
 | -------------------------- | ------------------------------------------------------------------------ | ------------------------ |
-| `SAFE_MCP_POLICY_FILE`     | Path to `policy.toml`                                                    | `policy.toml`            |
+| `SAFE_MCP_POLICY_FILE`     | Path to `policy.toml` (**required**, here or `--config`)                 | none — refuses to start  |
 | `SAFE_MCP_JAIL_ROOT`       | Terminal jail directory (**required**, here or `jail_root`)              | none — refuses to start  |
 | `SAFE_MCP_WORKSPACE_ROOT`  | Files workspace directory (**required**, here or `files.workspace_root`) | none — refuses to start  |
 | `SAFE_MCP_FILES_JOURNAL`   | Undo/redo journal path (must live outside the workspace)                 | `organizer-journal.json` |
 | `SAFE_MCP_AUDIT_LOG`       | Shared audit trail path (must live outside both jails)                   | `audit.jsonl`            |
 | `SAFE_MCP_AUDIT_FAIL_MODE` | `closed` or `open`                                                       | `closed`                 |
 
-Startup fails loudly — a printed `fatal:` message and a non-zero exit — on a
-missing or invalid `policy.toml`, an unset or non-directory jail/workspace
+Startup fails loudly — a printed `fatal:` message and a non-zero exit — on no
+policy file path given at all (neither `--config` nor `SAFE_MCP_POLICY_FILE`),
+a missing or invalid `policy.toml`, an unset or non-directory jail/workspace
 root, an invalid operator redaction regex, an unlabeled `[[files.skip]]`
 entry, or an audit log / journal located inside a jail it would then be able
 to move or forge.

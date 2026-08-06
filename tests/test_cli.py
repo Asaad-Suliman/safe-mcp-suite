@@ -14,7 +14,10 @@ def test_terminal_subcommand_dispatches_to_the_terminal_server(
     monkeypatch.setattr(
         cli,
         "SERVERS",
-        {"terminal": lambda: called.append("terminal"), "files": lambda: called.append("files")},
+        {
+            "terminal": lambda argv: called.append("terminal"),
+            "files": lambda argv: called.append("files"),
+        },
     )
     monkeypatch.setattr("sys.argv", ["safe-mcp", "terminal"])
     cli.main()
@@ -28,11 +31,28 @@ def test_files_subcommand_dispatches_to_the_files_server(
     monkeypatch.setattr(
         cli,
         "SERVERS",
-        {"terminal": lambda: called.append("terminal"), "files": lambda: called.append("files")},
+        {
+            "terminal": lambda argv: called.append("terminal"),
+            "files": lambda argv: called.append("files"),
+        },
     )
     monkeypatch.setattr("sys.argv", ["safe-mcp", "files"])
     cli.main()
     assert called == ["files"]
+
+
+def test_args_after_the_subcommand_are_forwarded_to_the_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received = []
+    monkeypatch.setattr(
+        cli,
+        "SERVERS",
+        {"terminal": lambda argv: received.append(argv), "files": lambda argv: None},
+    )
+    monkeypatch.setattr("sys.argv", ["safe-mcp", "terminal", "--config", "policy.toml"])
+    cli.main()
+    assert received == [["--config", "policy.toml"]]
 
 
 def test_missing_subcommand_prints_usage_and_exits(

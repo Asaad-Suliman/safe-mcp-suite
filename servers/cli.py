@@ -19,9 +19,9 @@ def main() -> None:
     try:
         target = SERVERS[sys.argv[1]]
     except (IndexError, KeyError):
-        print(f"usage: safe-mcp {{{'|'.join(SERVERS)}}}", file=sys.stderr)
+        print(f"usage: safe-mcp {{{'|'.join(SERVERS)}}} [--config PATH]", file=sys.stderr)
         raise SystemExit(1)
-    target()
+    target(sys.argv[2:])
 
 
 if __name__ == "__main__":  # pragma: no cover

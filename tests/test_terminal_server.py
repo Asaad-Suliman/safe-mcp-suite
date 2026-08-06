@@ -394,6 +394,84 @@ def test_startup_refuses_an_unloadable_policy(
     assert "could not load policy" in capsys.readouterr().err
 
 
+# --- --config flag -----------------------------------------------------
+
+
+def test_explicit_config_flag_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jail = tmp_path / "jail"
+    jail.mkdir()
+    policy = tmp_path / "policy.toml"
+    policy.write_text(POLICY)
+    monkeypatch.setenv(config_module.ENV_JAIL_ROOT, str(jail))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main(["--config", str(policy)])
+    assert reached_run == [True]
+
+
+def test_config_flag_with_a_missing_file_fails_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    missing = tmp_path / "nope.toml"
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    with pytest.raises(SystemExit):
+        server.main(["--config", str(missing)])
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_policy_file_env_var_is_used_when_no_flag_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jail = tmp_path / "jail"
+    jail.mkdir()
+    policy = tmp_path / "policy.toml"
+    policy.write_text(POLICY)
+    monkeypatch.setenv(config_module.ENV_JAIL_ROOT, str(jail))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv(config_module.ENV_POLICY_FILE, str(policy))
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main([])
+    assert reached_run == [True]
+
+
+def test_explicit_config_flag_beats_the_policy_file_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jail = tmp_path / "jail"
+    jail.mkdir()
+    good_policy = tmp_path / "policy.toml"
+    good_policy.write_text(POLICY)
+    monkeypatch.setenv(config_module.ENV_JAIL_ROOT, str(jail))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv(config_module.ENV_POLICY_FILE, str(tmp_path / "does-not-exist.toml"))
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main(["--config", str(good_policy)])
+    assert reached_run == [True]
+
+
+def test_startup_refuses_when_no_config_path_is_given_at_all(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    with pytest.raises(SystemExit):
+        server.main([])
+    assert "no policy file configured" in capsys.readouterr().err
+
+
 # --- tool registration -----------------------------------------------------
 
 

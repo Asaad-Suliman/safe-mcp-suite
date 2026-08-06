@@ -15,6 +15,7 @@ import pytest
 
 from safety.audit import FAIL_CLOSED, AuditLogger
 from safety.result import ResultCode
+from servers.files import config as config_module
 from servers.files import server
 from servers.files.config import FilesConfig
 from servers.files.config import load as load_config
@@ -634,3 +635,84 @@ def test_nothing_moves_when_the_audit_log_cannot_be_written(env, tmp_path: Path)
 
     assert result.code is ResultCode.AUDIT_UNAVAILABLE
     assert (env.workspace / "a.pdf").exists(), "the file must not have moved"
+
+
+# --- --config flag -----------------------------------------------------
+
+
+def test_explicit_config_flag_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = tmp_path / "policy.toml"
+    policy.write_text("[files]\n")
+    monkeypatch.setenv(config_module.ENV_WORKSPACE_ROOT, str(workspace))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv(config_module.ENV_JOURNAL, str(tmp_path / "journal.json"))
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main(["--config", str(policy)])
+    assert reached_run == [True]
+
+
+def test_config_flag_with_a_missing_file_fails_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    missing = tmp_path / "nope.toml"
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    with pytest.raises(SystemExit):
+        server.main(["--config", str(missing)])
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_policy_file_env_var_is_used_when_no_flag_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = tmp_path / "policy.toml"
+    policy.write_text("[files]\n")
+    monkeypatch.setenv(config_module.ENV_WORKSPACE_ROOT, str(workspace))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv(config_module.ENV_JOURNAL, str(tmp_path / "journal.json"))
+    monkeypatch.setenv(config_module.ENV_POLICY_FILE, str(policy))
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main([])
+    assert reached_run == [True]
+
+
+def test_explicit_config_flag_beats_the_policy_file_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    good_policy = tmp_path / "policy.toml"
+    good_policy.write_text("[files]\n")
+    monkeypatch.setenv(config_module.ENV_WORKSPACE_ROOT, str(workspace))
+    monkeypatch.setenv(config_module.ENV_AUDIT_LOG, str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv(config_module.ENV_JOURNAL, str(tmp_path / "journal.json"))
+    monkeypatch.setenv(config_module.ENV_POLICY_FILE, str(tmp_path / "does-not-exist.toml"))
+
+    reached_run = []
+    monkeypatch.setattr(server.mcp, "run", lambda: reached_run.append(True))
+
+    server.main(["--config", str(good_policy)])
+    assert reached_run == [True]
+
+
+def test_startup_refuses_when_no_config_path_is_given_at_all(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.delenv(config_module.ENV_POLICY_FILE, raising=False)
+
+    with pytest.raises(SystemExit):
+        server.main([])
+    assert "no policy file configured" in capsys.readouterr().err
