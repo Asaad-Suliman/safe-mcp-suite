@@ -1,3 +1,10 @@
+# TEMPLATE — not runnable as shipped. jail_root (below) and workspace_root
+# (further down) are commented out on purpose: this file will refuse to start
+# until you set them to a real sandbox directory on your machine. That refusal
+# is deliberate, not a bug — see servers/terminal/server.py and
+# servers/files/server.py, which exit rather than fall back to a jail nobody
+# chose. For something that runs immediately, copy policy.example.toml instead.
+#
 # Policy for the safe-mcp-suite. One file, read by both servers:
 #   [terminal] — the terminal server, below.
 #   [files]    — the file organizer server, further down.

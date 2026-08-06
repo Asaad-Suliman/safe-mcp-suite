@@ -1,0 +1,177 @@
+# EXAMPLE — runnable as shipped. Every value below is real; nothing is
+# commented out. Paths are relative to wherever you invoke the server from, so
+# before running it, create the directories they point at:
+#
+#   mkdir -p sandbox/terminal sandbox/files state
+#   uv run safe-mcp terminal --config policy.example.toml
+#   uv run safe-mcp files --config policy.example.toml
+#
+# sandbox/terminal and sandbox/files are the two jails; state/ holds the audit
+# log and undo journal, deliberately outside both. For a template that starts
+# blank and forces you to choose your own paths, see policy.toml instead.
+#
+# Policy for the safe-mcp-suite. One file, read by both servers:
+#   [terminal] — the terminal server, below.
+#   [files]    — the file organizer server, further down.
+# audit_log, audit_fail_mode, and [redaction] are shared by both servers and
+# sit at the top level rather than under either section.
+
+# Audit trail: every tool invocation is appended as one JSON line.
+# "closed" refuses to run a command whose record cannot be written, so there is
+# no unlogged execution. "open" runs anyway and warns on stderr.
+# Env overrides: SAFE_MCP_AUDIT_LOG, SAFE_MCP_AUDIT_FAIL_MODE.
+audit_log = "state/audit.jsonl"
+audit_fail_mode = "closed"
+
+# Secret redaction over command output and audit records.
+# entropy_fallback catches unrecognised high-entropy tokens but trips on git
+# SHAs, UUIDs, and base64 data — off by default. extra_patterns lets an operator
+# add named rules; an invalid regex fails loudly at startup.
+[redaction]
+enabled = true
+entropy_fallback = false
+extra_patterns = []   # e.g. [{ name = "internal_id", regex = "INT-[0-9]{8}" }]
+
+
+# ---------------------------------------------------------------------------
+# TERMINAL SERVER
+# ---------------------------------------------------------------------------
+# DENY-BY-DEFAULT: a command whose name is not in [terminal.allowlist] is
+# denied.
+# DENY WINS: a command in both lists is denied.
+# Command-name matching is case-insensitive (`RM` is treated as `rm`).
+# Commands containing shell metacharacters ( ; | & < > ` $( ) are rejected
+# before any allow/deny check — no chaining, redirection, or substitution.
+[terminal]
+# Jail root: the directory commands may run in. Relative to the launch
+# directory — create it first (see the mkdir above). Env override:
+# SAFE_MCP_JAIL_ROOT.
+jail_root = "sandbox/terminal"
+
+# Execution limits.
+[terminal.limits]
+timeout_seconds = 30
+max_output_bytes = 65536
+
+[terminal.allowlist]
+# Commands permitted to run, by name. Arguments may still be restricted below.
+commands = ["ls", "cat", "echo", "pwd", "git"]
+
+[terminal.denylist]
+# Always denied, even if also present in the allowlist.
+commands = ["rm", "shutdown", "reboot", "curl", "wget", "chmod", "sudo"]
+
+# Argument-level rules: a command allowed in general, denied for specific
+# argument patterns. A rule fires when ALL tokens of any deny_args pattern are
+# present among the arguments, in any order — so `git push --force` and
+# `git --force push` are both denied.
+[[terminal.rules]]
+command = "git"
+deny_args = ["push --force", "push -f"]
+reason = "force-push rewrites shared history"
+
+[[terminal.rules]]
+command = "git"
+deny_args = ["clean -fdx"]
+reason = "git clean -fdx destroys untracked work irreversibly"
+
+
+# ---------------------------------------------------------------------------
+# FILE ORGANIZER SERVER
+# ---------------------------------------------------------------------------
+# TWO LAYERS OF RULE. Every skip rule below declares which one it belongs to.
+#
+#   protection — a safety invariant. Binding on every tool, however the request
+#                was phrased. Nothing you can ask for makes it permitted.
+#   restraint  — a rule that exists because filing this AUTOMATICALLY would be a
+#                guess. It stops the organizer; it does not stop a request that
+#                names one specific file.
+#
+# So: plan_organize enforces both layers. move_file enforces protection only,
+# because a request naming one file contains no guess to protect anyone from.
+# move_file will therefore move an installer or a dotfile if you ask it to by
+# name, and will still refuse a symlink, a path leaving the workspace, a name
+# carrying control characters, and any destination that already exists.
+#
+# Only regular files are organizable — plan_organize never proposes moving a
+# directory, and move_file will move one only when asked. A symlink matches no
+# allow rule in EITHER layer and is refused by deny-by-default; there is no line
+# below to delete that would turn symlink-following on.
+#
+# There is no delete tool in this server. Nothing here can trash a file.
+[files]
+# The directory the organizer may touch. Relative to the launch directory —
+# create it first (see the mkdir above). Env override: SAFE_MCP_WORKSPACE_ROOT.
+workspace_root = "sandbox/files"
+
+# Undo/redo state. Lives under state/, outside workspace_root, or the
+# organizer would treat its own journal as a file to be filed away.
+# Env: SAFE_MCP_FILES_JOURNAL.
+journal = "state/organizer-journal.json"
+
+# Cap on how many moves one plan may contain. A larger workspace still plans;
+# the plan is truncated and reported as such rather than returning unbounded.
+max_plan_moves = 500
+
+# Extension -> destination folder. An extension may appear in only one category.
+[files.categories]
+Documents = [".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".epub"]
+Spreadsheets = [".xls", ".xlsx", ".ods", ".csv"]
+Presentations = [".ppt", ".pptx", ".odp"]
+Images = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".svg", ".heic", ".ico"]
+Audio = [".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma"]
+Videos = [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".m4v"]
+Archives = [".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".iso"]
+
+# Skip rules. Each entry becomes DENY rules for the "organize" action.
+#   layer    — REQUIRED. "protection" or "restraint". See the two layers above.
+#   when     — attributes EVERY generated rule requires (an AND)
+#   any_ext  — one rule per extension  (an OR)
+#   any_name — one rule per filename   (an OR)
+# There is no default layer. Whether a rule is a safety invariant or a refusal to
+# guess is a judgement about your files, and it cannot be read off the rule text:
+# any_ext = [".exe"] is a restraint on a desktop and an invariant on a server.
+# An entry without a layer is a startup failure, not a guess.
+#
+# Attribute names are validated at startup against what the server can actually
+# observe, so a typo is a loud failure rather than a rule that never fires.
+# Observable attributes: file, dir, symlink, hidden, empty, unsafe-name,
+# plus ext:<.ext> and name:<filename>.
+
+# protection: an unsafe name is refused everywhere, including a direct
+# move_file request — there is no way to ask for this file by name that a
+# terminal or log could safely display.
+[[files.skip]]
+layer = "protection"
+when = ["unsafe-name"]
+reason = "the name contains control characters and cannot be safely displayed or logged"
+
+# restraint: filing a dotfile automatically would be a guess; move_file still
+# moves one if you name it.
+[[files.skip]]
+layer = "restraint"
+when = ["hidden"]
+reason = "dotfiles are configuration, not clutter to be filed"
+
+# restraint: an installer or app folder left where the user put it is a
+# guess to file automatically, not a safety concern; move_file still moves
+# one if you name it.
+[[files.skip]]
+layer = "restraint"
+any_ext = [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".lnk", ".appimage", ".run", ".deb", ".rpm", ".dmg", ".pkg", ".apk", ".app"]
+reason = "installers, executables and application folders are left where the user put them"
+
+# restraint: OS metadata has no category to guess; move_file still moves one
+# if you name it.
+[[files.skip]]
+layer = "restraint"
+any_name = ["desktop.ini", "thumbs.db", ".ds_store"]
+reason = "operating-system metadata, not user files"
+
+# restraint: project files (no leading dot, so not covered by the "hidden"
+# rule above) are a guess to file automatically; move_file still moves one if
+# you name it.
+[[files.skip]]
+layer = "restraint"
+any_name = ["makefile", "dockerfile", "readme.md", "license"]
+reason = "project files belong beside the project"

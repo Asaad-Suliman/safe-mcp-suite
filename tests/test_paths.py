@@ -125,6 +125,32 @@ def test_contains_agrees_with_resolve(jail):
     assert jail.contains(jail.root) is True
 
 
+# --- contains_external(): the outside-the-jail check for a path the app opens
+# directly (the audit log, the undo journal), not one it joins onto the root.
+
+
+def test_contains_external_resolves_relative_to_cwd_not_the_root(
+    jail, tmp_path, monkeypatch
+):
+    # A relative audit-log path sits next to the jail, not inside it — but
+    # contains() joins any relative candidate onto the root, so it always
+    # says "inside" regardless of the filename. contains_external() resolves
+    # it the way audit.py / journal.py actually open it: against the process
+    # cwd.
+    monkeypatch.chdir(tmp_path)
+    assert jail.contains("audit.jsonl") is True
+    assert jail.contains_external("audit.jsonl") is False
+
+
+def test_contains_external_still_catches_a_path_really_inside(jail, monkeypatch):
+    monkeypatch.chdir(jail.root)
+    assert jail.contains_external("audit.jsonl") is True
+
+
+def test_contains_external_accepts_an_absolute_path_outside(jail, tmp_path):
+    assert jail.contains_external(tmp_path / "outside" / "audit.jsonl") is False
+
+
 # --- resolve_for_write: containment without following the leaf ------------
 #
 # resolve() answers "what does this point at", which is right for a directory a

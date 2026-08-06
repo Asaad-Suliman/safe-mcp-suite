@@ -97,6 +97,21 @@ class PathJail:
         """True if ``path`` resolves to the jail root or somewhere beneath it."""
         return self.resolve(path) is not None
 
+    def contains_external(self, path: str | Path) -> bool:
+        """True if ``path`` — resolved the way it is actually opened — lands inside.
+
+        For a state file the app opens directly (the audit log, the undo
+        journal), a relative value is relative to the process's working
+        directory, not to the jail root. :meth:`contains` answers a different
+        question — it joins a relative candidate onto the jail root, which is
+        right for a command's cwd or a move target, but wrong here: it would
+        make ``jail.root / "audit.jsonl"`` look contained no matter what the
+        filename was, since a plain relative path is trivially nested under
+        whatever it is joined to.
+        """
+        resolved = Path(path).expanduser().resolve()
+        return self._inside(resolved)
+
     def _inside(self, resolved: Path) -> bool:
         """Containment on resolved paths. Path-segment aware, not textual.
 

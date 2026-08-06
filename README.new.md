@@ -32,36 +32,25 @@ value the server never sees. `--config` (or the `SAFE_MCP_POLICY_FILE`
 environment variable, which still works and still wins over nothing) is the
 one path that's actually guaranteed.
 
+The repo ships two policy files: `policy.toml` is an annotated template with
+`jail_root` and `workspace_root` commented out — it refuses to start until you
+set them, on purpose. `policy.example.toml` is the ready-to-run one, with real
+values under a `./sandbox` directory the commands below create.
+
 ```sh
 git clone https://github.com/Asaad-Suliman/safe-mcp-suite.git safe-mcp-suite
 cd safe-mcp-suite
 uv sync
-mkdir -p sandbox inbox state
-cat > my-policy.toml <<EOF
-audit_log = "$PWD/state/audit.jsonl"
-
-[terminal]
-jail_root = "$PWD/sandbox"
-[terminal.allowlist]
-commands = ["ls", "cat", "echo", "pwd"]
-
-[files]
-workspace_root = "$PWD/inbox"
-journal = "$PWD/state/organizer-journal.json"
-[files.categories]
-Documents = [".pdf", ".txt", ".md"]
-Images = [".jpg", ".png"]
-EOF
-uv run safe-mcp terminal --config my-policy.toml
-uv run safe-mcp files --config my-policy.toml
+mkdir -p sandbox/terminal sandbox/files state
+uv run safe-mcp terminal --config policy.example.toml
+uv run safe-mcp files --config policy.example.toml
 ```
 
 `jail_root` and `workspace_root` are still required, here or via
 `SAFE_MCP_JAIL_ROOT` / `SAFE_MCP_WORKSPACE_ROOT` — that hasn't changed.
-`audit_log` and `journal` need to be outside the directory they're paired
-with (a permitted command could otherwise read or forge its own audit
-trail), which is why they're written as absolute paths under `state/` above
-rather than left at their relative defaults.
+`audit_log` and `journal` live under `state/`, outside both jails (a permitted
+command could otherwise read or forge its own audit trail), which is why the
+`mkdir` above creates it alongside the two sandboxes.
 
 Register with an MCP client, for example:
 

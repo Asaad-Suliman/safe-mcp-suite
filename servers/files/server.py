@@ -712,7 +712,7 @@ def main(argv: list[str] | None = None) -> None:
         ("audit log", config.audit_log),
         ("undo journal", config.journal),
     ):
-        if jail.contains(location):
+        if jail.contains_external(location):
             _fatal(
                 f"the {label} must live outside the workspace root, else the "
                 "organizer could move or overwrite its own state:\n"

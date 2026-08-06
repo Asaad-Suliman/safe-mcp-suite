@@ -401,9 +401,11 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     # The audit log must not be reachable from inside the jail, or a permitted
-    # command could read the trail or append forged records to it. Asked through
-    # the same containment check every other path uses.
-    if jail.contains(config.audit_log):
+    # command could read the trail or append forged records to it. Resolved the
+    # way AuditLogger actually opens it (relative to cwd), not the way a
+    # command's cwd is resolved (relative to the jail root) — see
+    # PathJail.contains_external.
+    if jail.contains_external(config.audit_log):
         _fatal(
             "the audit log must live outside the jail root, else a permitted "
             "command could read or forge it:\n"
