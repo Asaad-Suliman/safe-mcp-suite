@@ -244,7 +244,7 @@ class Journal:
             return len(done), len(undone)
 
 
-# ponytail: the whole journal is rewritten on every action, so cost grows with
+# NOTE: the whole journal is rewritten on every action, so cost grows with
 # history length — fine at one write per action with human-scale histories, but
 # it is O(n) per action and the file never shrinks. Upgrade path if it matters:
 # cap `done` at a configured depth and drop the oldest, or move to an append-only

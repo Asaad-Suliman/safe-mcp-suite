@@ -54,7 +54,7 @@ class ParsedCommand:
 
 def _find_metacharacter(raw: str) -> str | None:
     """Return the first shell metacharacter in ``raw``, else None."""
-    # ponytail: raw substring scan, known ceiling — it flags metacharacters
+    # NOTE: raw substring scan, known ceiling — it flags metacharacters
     # inside quotes too, so `echo "a;b"` is rejected even though it is harmless.
     # That is the safe direction to be wrong in: there is no quoting trick that
     # smuggles an operator past a scan that ignores quoting. Upgrade path is a

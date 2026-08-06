@@ -78,7 +78,7 @@ def move_one(
     # replaces an existing destination — this is the only thing between "no silent
     # overwrites" and a clobber.
     #
-    # ponytail: check-then-use, same TOCTOU ceiling as safety/paths.py. A file
+    # NOTE: check-then-use, same TOCTOU ceiling as safety/paths.py. A file
     # created at the destination between this check and the rename below is still
     # overwritten. Upgrade path is os.link(src, dest) + os.unlink(src), where the
     # link fails atomically if the destination exists; it is not used here because

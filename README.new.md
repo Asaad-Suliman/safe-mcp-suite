@@ -483,7 +483,7 @@ server.
   `safety/paths.py` and `servers/files/apply.py` check containment or
   occupancy and then act on a separate syscall; a symlink swapped or a file
   created in that gap is not covered. Documented in-code as a deliberate,
-  named ceiling (`# ponytail:` comments in both files), with an upgrade path
+  named ceiling (`# NOTE:` comments in both files), with an upgrade path
   (`O_NOFOLLOW` plus dir-fd relative operations) noted for if it's ever needed.
 - **Grandchild processes are not reaped.** A killed or timed-out command's own
   child processes are not in a separate process group; the executor kills the

@@ -105,7 +105,7 @@ class PathJail:
         ``/jail``) is correctly outside. A string ``startswith`` check would let
         it through.
         """
-        # ponytail: check-then-use. A symlink swapped between this check and the
+        # NOTE: check-then-use. A symlink swapped between this check and the
         # caller's open/move is not covered (TOCTOU). Upgrade path is O_NOFOLLOW
         # plus dir-fd relative operations if an attacker is assumed to have write
         # access inside the jail.

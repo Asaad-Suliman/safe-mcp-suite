@@ -135,7 +135,7 @@ class FilesConfig:
     max_plan_moves: int = DEFAULT_MAX_PLAN_MOVES
 
 
-# ponytail: these four validators and _redaction below are near-copies of the ones
+# NOTE: these four validators and _redaction below are near-copies of the ones
 # in servers/terminal/config.py. Duplicated rather than shared because the only
 # honest home for them is a new top-level config package, and two servers is not
 # yet enough callers to justify one. Upgrade path: if a third server appears, or
