@@ -6,7 +6,7 @@ safety core.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests: 644 passing](https://img.shields.io/badge/tests-644%20passing-brightgreen)](tests/)
+[![CI](https://github.com/Asaad-Suliman/safe-mcp-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/Asaad-Suliman/safe-mcp-suite/actions/workflows/ci.yml)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 
 ## What this is
@@ -14,8 +14,8 @@ safety core.
 Giving a model raw shell access or unrestricted file-move access is dangerous:
 one crafted string can chain commands or escape a directory, and a naive file
 mover can overwrite or lose files with no way back. `safe-mcp-suite` turns both
-into bounded, auditable operations — `safe-mcp-terminal` runs a small,
-explicitly allowlisted set of commands with no shell, and `safe-mcp-files`
+into bounded, auditable operations — `safe-mcp terminal` runs a small,
+explicitly allowlisted set of commands with no shell, and `safe-mcp files`
 organizes a workspace with every move undoable and nothing ever silently
 overwritten. Both are wiring around one shared core (`safety/`) that answers
 every allow/deny question the same way: nothing is permitted unless a rule
@@ -26,7 +26,7 @@ allows it, and every decision is audited before the caller finds out what it was
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-git clone <repo-url> safe-mcp-suite
+git clone https://github.com/Asaad-Suliman/safe-mcp-suite.git safe-mcp-suite
 cd safe-mcp-suite
 uv sync
 cp .env.example .env
@@ -41,12 +41,12 @@ Register with an MCP client, for example:
 ```json
 {
   "mcpServers": {
-    "safe-mcp-terminal": {
+    "safe-mcp terminal": {
       "command": "uv",
       "args": ["run", "safe-mcp", "terminal"],
       "env": { "SAFE_MCP_JAIL_ROOT": "/srv/safe-mcp/sandbox" }
     },
-    "safe-mcp-files": {
+    "safe-mcp files": {
       "command": "uv",
       "args": ["run", "safe-mcp", "files"],
       "env": { "SAFE_MCP_WORKSPACE_ROOT": "/srv/safe-mcp/inbox" }
@@ -200,12 +200,12 @@ redaction, or auditing — they call one shared core.
 flowchart TB
     client(["MCP client"])
 
-    subgraph terminal["safe-mcp-terminal"]
+    subgraph terminal["terminal server"]
         tparse["parse.py<br/>argv split + metacharacter scan"]
         texec["execute.py<br/>shell=False, env scrub, timeout, output cap"]
     end
 
-    subgraph files["safe-mcp-files"]
+    subgraph files["files server"]
         finspect["inspect.py<br/>lstat facts — reports, never judges"]
         fapply["apply.py<br/>move_one — containment, no overwrite"]
     end
