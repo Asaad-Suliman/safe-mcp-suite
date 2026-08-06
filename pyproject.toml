@@ -8,8 +8,7 @@ requires-python = ">=3.12"
 dependencies = ["mcp>=2.0"]
 
 [project.scripts]
-safe-mcp-terminal = "servers.terminal.server:main"
-safe-mcp-files = "servers.files.server:main"
+safe-mcp = "servers.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
