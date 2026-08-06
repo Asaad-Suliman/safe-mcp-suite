@@ -18,13 +18,13 @@ from servers.terminal.config import ConfigError, TerminalConfig, load
 from servers.terminal.parse import ParsedCommand, parse
 
 BASIC = """
-[allowlist]
+[terminal.allowlist]
 commands = ["ls", "echo", "git"]
 
-[denylist]
+[terminal.denylist]
 commands = ["rm", "curl"]
 
-[[rules]]
+[[terminal.rules]]
 command = "git"
 deny_args = ["push --force"]
 reason = "force-push rewrites shared history"
@@ -70,9 +70,9 @@ def test_a_command_on_both_lists_is_denied(tmp_path: Path) -> None:
         _write(
             tmp_path,
             """
-[allowlist]
+[terminal.allowlist]
 commands = ["git"]
-[denylist]
+[terminal.denylist]
 commands = ["git"]
 """,
         )
@@ -85,9 +85,9 @@ def test_case_is_normalized(tmp_path: Path) -> None:
         _write(
             tmp_path,
             """
-[allowlist]
+[terminal.allowlist]
 commands = ["ls"]
-[denylist]
+[terminal.denylist]
 commands = ["RM"]
 """,
         )
@@ -129,9 +129,9 @@ def test_multiple_deny_args_patterns_each_become_a_rule(tmp_path: Path) -> None:
         _write(
             tmp_path,
             """
-[allowlist]
+[terminal.allowlist]
 commands = ["git"]
-[[rules]]
+[[terminal.rules]]
 command = "git"
 deny_args = ["push --force", "push -f"]
 reason = "no force pushing"
@@ -168,18 +168,20 @@ def test_settings_are_read_from_the_file(tmp_path: Path) -> None:
         _write(
             tmp_path,
             """
-jail_root = "/srv/sandbox"
 audit_log = "/var/log/trail.jsonl"
 audit_fail_mode = "open"
-
-[limits]
-timeout_seconds = 5
-max_output_bytes = 1024
 
 [redaction]
 enabled = false
 entropy_fallback = true
 extra_patterns = [{ name = "internal_id", regex = "INT-[0-9]{8}" }]
+
+[terminal]
+jail_root = "/srv/sandbox"
+
+[terminal.limits]
+timeout_seconds = 5
+max_output_bytes = 1024
 """,
         )
     )
@@ -208,9 +210,11 @@ def test_env_overrides_beat_the_file(
     path = _write(
         tmp_path,
         """
-jail_root = "/from/file"
 audit_log = "/from/file.jsonl"
 audit_fail_mode = "closed"
+
+[terminal]
+jail_root = "/from/file"
 """,
     )
     monkeypatch.setenv(config.ENV_JAIL_ROOT, "/from/env")
@@ -260,30 +264,32 @@ def test_a_directory_instead_of_a_file_raises(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("body", "match"),
     [
-        ('[allowlist]\ncommands = "ls"', "allowlist.commands"),
-        ("[allowlist]\ncommands = [1, 2]", "allowlist.commands"),
-        ('[denylist]\ncommands = "rm"', "denylist.commands"),
-        ('allowlist = "not a table"', r"\[allowlist\]"),
+        ('[terminal.allowlist]\ncommands = "ls"', "allowlist.commands"),
+        ("[terminal.allowlist]\ncommands = [1, 2]", "allowlist.commands"),
+        ('[terminal.denylist]\ncommands = "rm"', "denylist.commands"),
+        ('[terminal]\nallowlist = "not a table"', r"\[allowlist\]"),
         ('audit_fail_mode = "sometimes"', "audit_fail_mode"),
         ("audit_log = 42", "audit_log"),
-        ("jail_root = 42", "jail_root"),
-        ('rules = "not an array"', r"\[\[rules\]\]"),
-        ("[[rules]]\ndeny_args = []", "command"),
-        ('[[rules]]\ncommand = ""', "command"),
-        ('[[rules]]\ncommand = "git"\nreason = 5', "reason"),
-        ('[[rules]]\ncommand = "git"\ndeny_args = "push"', "deny_args"),
-        ('[[rules]]\ncommand = "git"\ndeny_args = ["  "]', "empty pattern"),
+        ("[terminal]\njail_root = 42", "terminal.jail_root"),
+        ("terminal = \"not a table\"", r"\[terminal\]"),
+        ('[terminal]\nrules = "not an array"', r"\[\[terminal\.rules\]\]"),
+        ("[terminal]\nbogus = \"x\"", "unknown key"),
+        ("[[terminal.rules]]\ndeny_args = []", "command"),
+        ('[[terminal.rules]]\ncommand = ""', "command"),
+        ('[[terminal.rules]]\ncommand = "git"\nreason = 5', "reason"),
+        ('[[terminal.rules]]\ncommand = "git"\ndeny_args = "push"', "deny_args"),
+        ('[[terminal.rules]]\ncommand = "git"\ndeny_args = ["  "]', "empty pattern"),
         ('redaction = "not a table"', r"\[redaction\]"),
         ("[redaction]\nenabled = 1", "redaction.enabled"),
         ("[redaction]\nentropy_fallback = 1", "entropy_fallback"),
         ('[redaction]\nextra_patterns = "no"', "extra_patterns"),
         ("[redaction]\nextra_patterns = [{ regex = \"x\" }]", "name"),
         ('[redaction]\nextra_patterns = [{ name = "n" }]', "regex"),
-        ('[limits]\ntimeout_seconds = "fast"', "timeout_seconds"),
-        ("[limits]\ntimeout_seconds = 0", "greater than zero"),
-        ("[limits]\ntimeout_seconds = -5", "greater than zero"),
-        ('[limits]\nmax_output_bytes = "big"', "max_output_bytes"),
-        ("[limits]\nmax_output_bytes = 0", "greater than zero"),
+        ('[terminal.limits]\ntimeout_seconds = "fast"', "timeout_seconds"),
+        ("[terminal.limits]\ntimeout_seconds = 0", "greater than zero"),
+        ("[terminal.limits]\ntimeout_seconds = -5", "greater than zero"),
+        ('[terminal.limits]\nmax_output_bytes = "big"', "max_output_bytes"),
+        ("[terminal.limits]\nmax_output_bytes = 0", "greater than zero"),
     ],
 )
 def test_malformed_config_raises(tmp_path: Path, body: str, match: str) -> None:

@@ -124,11 +124,11 @@ def _argument_rules(raw: object) -> tuple[Rule, ...]:
     argument that merely contains that substring.
     """
     if not isinstance(raw, list):
-        raise ConfigError("[[rules]] must be an array of tables")
+        raise ConfigError("[[terminal.rules]] must be an array of tables")
 
     rules: list[Rule] = []
     for index, entry in enumerate(raw):
-        where = f"rules[{index}]"
+        where = f"terminal.rules[{index}]"
         if not isinstance(entry, dict):
             raise ConfigError(f"{where} must be a table")
 
@@ -212,11 +212,19 @@ def load(path: str | Path | None = None) -> TerminalConfig:
     except OSError as exc:
         raise ConfigError(f"could not read policy file: {exc}") from exc
 
+    terminal = _table(data, "terminal")
+    unknown = set(terminal) - {"jail_root", "limits", "allowlist", "denylist", "rules"}
+    if unknown:
+        # A misspelled key (e.g. "alowlist") would otherwise be silently ignored,
+        # leaving a command allowed or denied by an empty list instead of by
+        # what the operator actually wrote.
+        raise ConfigError(f"[terminal] has unknown key(s): {', '.join(sorted(unknown))}")
+
     allow_names = _str_list(
-        _table(data, "allowlist").get("commands", []), "allowlist.commands"
+        _table(terminal, "allowlist").get("commands", []), "terminal.allowlist.commands"
     )
     deny_names = _str_list(
-        _table(data, "denylist").get("commands", []), "denylist.commands"
+        _table(terminal, "denylist").get("commands", []), "terminal.denylist.commands"
     )
 
     # The whole translation. Note what is absent: no precedence handling. An entry
@@ -233,12 +241,12 @@ def load(path: str | Path | None = None) -> TerminalConfig:
             )
             for name in deny_names
         )
-        + _argument_rules(data.get("rules", []))
+        + _argument_rules(terminal.get("rules", []))
     )
 
-    jail_root = os.environ.get(ENV_JAIL_ROOT) or data.get("jail_root", "")
+    jail_root = os.environ.get(ENV_JAIL_ROOT) or terminal.get("jail_root", "")
     if not isinstance(jail_root, str):
-        raise ConfigError("jail_root must be a string")
+        raise ConfigError("terminal.jail_root must be a string")
 
     audit_log = os.environ.get(ENV_AUDIT_LOG) or data.get(
         "audit_log", DEFAULT_AUDIT_LOG
@@ -256,7 +264,7 @@ def load(path: str | Path | None = None) -> TerminalConfig:
         )
 
     enabled, entropy, extra = _redaction(_table(data, "redaction"))
-    limits = _table(data, "limits")
+    limits = _table(terminal, "limits")
 
     return TerminalConfig(
         policy=Policy(rules=rules),
@@ -267,10 +275,11 @@ def load(path: str | Path | None = None) -> TerminalConfig:
         redaction_entropy_fallback=entropy,
         redaction_extra_patterns=extra,
         timeout=_positive_number(
-            limits.get("timeout_seconds", DEFAULT_TIMEOUT), "limits.timeout_seconds"
+            limits.get("timeout_seconds", DEFAULT_TIMEOUT),
+            "terminal.limits.timeout_seconds",
         ),
         max_output_bytes=_positive_int(
             limits.get("max_output_bytes", DEFAULT_MAX_OUTPUT_BYTES),
-            "limits.max_output_bytes",
+            "terminal.limits.max_output_bytes",
         ),
     )

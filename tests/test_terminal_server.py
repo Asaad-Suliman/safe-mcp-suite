@@ -20,13 +20,13 @@ from servers.terminal import server
 from servers.terminal.config import TerminalConfig, load
 
 POLICY = """
-[allowlist]
+[terminal.allowlist]
 commands = ["echo", "git", "pwd", "ls"]
 
-[denylist]
+[terminal.denylist]
 commands = ["rm", "curl"]
 
-[[rules]]
+[[terminal.rules]]
 command = "git"
 deny_args = ["push --force"]
 reason = "force-push rewrites shared history"

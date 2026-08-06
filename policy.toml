@@ -1,17 +1,8 @@
-# Policy for the safe-mcp-suite terminal server.
-#
-# DENY-BY-DEFAULT: a command whose name is not in [allowlist] is denied.
-# DENY WINS: a command in both lists is denied.
-# Command-name matching is case-insensitive (`RM` is treated as `rm`).
-# Commands containing shell metacharacters ( ; | & < > ` $( ) are rejected
-# before any allow/deny check — no chaining, redirection, or substitution.
-
-# Jail root: the directory commands may run in. REQUIRED — set it here or via
-# SAFE_MCP_JAIL_ROOT (env wins). Startup refuses if unset; there is no fallback
-# to the launch directory. Use an absolute path to a dedicated sandbox, and keep
-# the audit log OUTSIDE it — a permitted command inside the jail could otherwise
-# read the trail or append forged records to it.
-# jail_root = "/srv/safe-mcp/sandbox"
+# Policy for the safe-mcp-suite. One file, read by both servers:
+#   [terminal] — the terminal server, below.
+#   [files]    — the file organizer server, further down.
+# audit_log, audit_fail_mode, and [redaction] are shared by both servers and
+# sit at the top level rather than under either section.
 
 # Audit trail: every tool invocation is appended as one JSON line.
 # "closed" refuses to run a command whose record cannot be written, so there is
@@ -19,11 +10,6 @@
 # Env overrides: SAFE_MCP_AUDIT_LOG, SAFE_MCP_AUDIT_FAIL_MODE.
 audit_log = "audit.jsonl"
 audit_fail_mode = "closed"
-
-# Execution limits.
-[limits]
-timeout_seconds = 30
-max_output_bytes = 65536
 
 # Secret redaction over command output and audit records.
 # entropy_fallback catches unrecognised high-entropy tokens but trips on git
@@ -34,11 +20,34 @@ enabled = true
 entropy_fallback = false
 extra_patterns = []   # e.g. [{ name = "internal_id", regex = "INT-[0-9]{8}" }]
 
-[allowlist]
+
+# ---------------------------------------------------------------------------
+# TERMINAL SERVER
+# ---------------------------------------------------------------------------
+# DENY-BY-DEFAULT: a command whose name is not in [terminal.allowlist] is
+# denied.
+# DENY WINS: a command in both lists is denied.
+# Command-name matching is case-insensitive (`RM` is treated as `rm`).
+# Commands containing shell metacharacters ( ; | & < > ` $( ) are rejected
+# before any allow/deny check — no chaining, redirection, or substitution.
+[terminal]
+# Jail root: the directory commands may run in. REQUIRED — set it here or via
+# SAFE_MCP_JAIL_ROOT (env wins). Startup refuses if unset; there is no fallback
+# to the launch directory. Use an absolute path to a dedicated sandbox, and keep
+# the audit log OUTSIDE it — a permitted command inside the jail could otherwise
+# read the trail or append forged records to it.
+# jail_root = "/srv/safe-mcp/sandbox"
+
+# Execution limits.
+[terminal.limits]
+timeout_seconds = 30
+max_output_bytes = 65536
+
+[terminal.allowlist]
 # Commands permitted to run, by name. Arguments may still be restricted below.
 commands = ["ls", "cat", "echo", "pwd", "git"]
 
-[denylist]
+[terminal.denylist]
 # Always denied, even if also present in the allowlist.
 commands = ["rm", "shutdown", "reboot", "curl", "wget", "chmod", "sudo"]
 
@@ -46,12 +55,12 @@ commands = ["rm", "shutdown", "reboot", "curl", "wget", "chmod", "sudo"]
 # argument patterns. A rule fires when ALL tokens of any deny_args pattern are
 # present among the arguments, in any order — so `git push --force` and
 # `git --force push` are both denied.
-[[rules]]
+[[terminal.rules]]
 command = "git"
 deny_args = ["push --force", "push -f"]
 reason = "force-push rewrites shared history"
 
-[[rules]]
+[[terminal.rules]]
 command = "git"
 deny_args = ["clean -fdx"]
 reason = "git clean -fdx destroys untracked work irreversibly"
@@ -119,28 +128,39 @@ Archives = [".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".iso"]
 # Observable attributes: file, dir, symlink, hidden, empty, unsafe-name,
 # plus ext:<.ext> and name:<filename>.
 
+# protection: an unsafe name is refused everywhere, including a direct
+# move_file request — there is no way to ask for this file by name that a
+# terminal or log could safely display.
 [[files.skip]]
 layer = "protection"
 when = ["unsafe-name"]
 reason = "the name contains control characters and cannot be safely displayed or logged"
 
+# restraint: filing a dotfile automatically would be a guess; move_file still
+# moves one if you name it.
 [[files.skip]]
 layer = "restraint"
 when = ["hidden"]
 reason = "dotfiles are configuration, not clutter to be filed"
 
+# restraint: an installer or app folder left where the user put it is a
+# guess to file automatically, not a safety concern; move_file still moves
+# one if you name it.
 [[files.skip]]
 layer = "restraint"
 any_ext = [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".lnk", ".appimage", ".run", ".deb", ".rpm", ".dmg", ".pkg", ".apk", ".app"]
 reason = "installers, executables and application folders are left where the user put them"
 
+# restraint: OS metadata has no category to guess; move_file still moves one
+# if you name it.
 [[files.skip]]
 layer = "restraint"
 any_name = ["desktop.ini", "thumbs.db", ".ds_store"]
 reason = "operating-system metadata, not user files"
 
-# Dotfiles are already covered by the "hidden" rule above; these are the
-# project files that carry no leading dot.
+# restraint: project files (no leading dot, so not covered by the "hidden"
+# rule above) are a guess to file automatically; move_file still moves one if
+# you name it.
 [[files.skip]]
 layer = "restraint"
 any_name = ["makefile", "dockerfile", "readme.md", "license"]
