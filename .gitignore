@@ -29,3 +29,8 @@ audit/
 .DS_Store
 PHASE*_PROGRESS.md
 uv.lock
+
+# demo sandbox / capture artefacts
+sandbox/
+state/
+.demo-captures/
