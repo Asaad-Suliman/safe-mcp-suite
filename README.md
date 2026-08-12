@@ -1,58 +1,67 @@
 # safe-mcp-suite
 
-A hardened suite of two [MCP](https://modelcontextprotocol.io) servers — a terminal
-command executor and a file organizer — built on one shared, deny-by-default
-safety core.
+Two [MCP](https://modelcontextprotocol.io) servers — a terminal and a file organizer — sharing one safety core that neither of them is allowed to bypass.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/Asaad-Suliman/safe-mcp-suite/actions/workflows/ci.yml/badge.svg)](https://github.com/Asaad-Suliman/safe-mcp-suite/actions/workflows/ci.yml)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 
+---
+
 ## What this is
 
-Giving a model raw shell access or unrestricted file-move access is dangerous:
-one crafted string can chain commands or escape a directory, and a naive file
-mover can overwrite or lose files with no way back. `safe-mcp-suite` turns both
-into bounded, auditable operations — `safe-mcp terminal` runs a small,
-explicitly allowlisted set of commands with no shell, and `safe-mcp files`
-organizes a workspace with every move undoable and nothing ever silently
-overwritten. Both are wiring around one shared core (`safety/`) that answers
-every allow/deny question the same way: nothing is permitted unless a rule
-allows it, and every decision is audited before the caller finds out what it was.
+Search GitHub for an MCP server that runs shell commands and you will find the same file over and over: a tool decorated with `@mcp.tool()`, a call to `subprocess.run(command, shell=True)`, and the result handed straight back to the model. The filesystem ones are the same shape — `os.rename` in a loop, maybe a try/except around it.
+
+They work. That is the problem. They work until the model produces something nobody anticipated, and by then the deletion has already happened, and there is no record of what ran or why it was allowed to.
+
+This repo is those two servers rebuilt so that the safety **is** the design rather than a wrapper bolted on top. A single `safety/` package owns every decision that could hurt you — what is allowed, where the boundary is, what gets written down, what gets hidden. The two servers underneath it are wiring. Neither can reach past the core, because neither one implements a rule of its own.
+
+The bet behind it: **deterministic policy is more trustworthy than model judgment.** A prompt can talk a model out of being careful. It cannot talk a path-containment check into returning `True`.
+
+---
 
 ## Quickstart
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
-
-Both servers take their policy file as an explicit `--config PATH` argument.
-There's no default `policy.toml` lookup and nothing reads a `.env` file —
-`uv run` doesn't load one on its own, so a value that lives only there is a
-value the server never sees. `--config` (or the `SAFE_MCP_POLICY_FILE`
-environment variable, and takes effect when --config is absent) is the
-one path that's actually guaranteed.
-
-The repo ships two policy files: `policy.toml` is an annotated template with
-`jail_root` and `workspace_root` commented out — it refuses to start until you
-set them, on purpose. `policy.example.toml` is the ready-to-run one, with real
-values under a `./sandbox` directory the commands below create.
+You need Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 git clone https://github.com/Asaad-Suliman/safe-mcp-suite.git safe-mcp-suite
 cd safe-mcp-suite
 uv sync
 ./scripts/make_demo_sandbox.sh
+```
+
+That last script seeds `sandbox/terminal`, `sandbox/files`, and `state/` so both servers have somewhere legal to operate. Then start whichever one you want:
+
+```sh
 uv run safe-mcp terminal --config policy.example.toml
 uv run safe-mcp files --config policy.example.toml
 ```
 
-`jail_root` and `workspace_root` are still required, here or via
-`SAFE_MCP_JAIL_ROOT` / `SAFE_MCP_WORKSPACE_ROOT` — that hasn't changed.
-`audit_log` and `journal` live under `state/`, outside both jails (a permitted
-command could otherwise read or forge its own audit trail), which is why the
-script above creates it alongside the two sandboxes.
+### About that `--config` flag
 
-Register with an MCP client, for example:
+It is not optional, and there is no fallback. No ambient `./policy.toml` lookup, no `.env` loading, no default root that quietly points at your home directory. If neither `--config` nor `SAFE_MCP_POLICY_FILE` is set, the server prints why and exits.
+
+This is deliberate and it is the single most opinionated thing about the setup. A sandbox that silently defaults to somewhere convenient is a sandbox that will one day default to somewhere expensive. Refusing to start is the cheapest possible failure.
+
+Two policy files ship with the repo, and they are not interchangeable:
+
+| File                  | What it is                                      | Will it start?     |
+| --------------------- | ----------------------------------------------- | ------------------ |
+| `policy.example.toml` | Working example, rooted at `./sandbox`          | Yes — run it now   |
+| `policy.toml`         | Annotated template with the roots commented out | **No, on purpose** |
+
+`policy.toml` refuses to start until you fill in `jail_root` and `workspace_root` yourself. That refusal is a feature, and there is a regression test holding it in place. Copy it, edit it, point it at real directories when you are ready.
+
+The roots can also come from the environment if you prefer:
+
+```sh
+SAFE_MCP_JAIL_ROOT=/path/to/jail
+SAFE_MCP_WORKSPACE_ROOT=/path/to/workspace
+```
+
+### Registering with an MCP client
 
 ```json
 {
@@ -77,23 +86,13 @@ Register with an MCP client, for example:
 }
 ```
 
-Point `SAFE_MCP_POLICY_FILE` at whichever policy file you've actually
-configured for that deployment — `policy.example.toml` above is illustrative,
-not a requirement.
-
-An MCP client sets `env` on the child process directly rather than reading
-a `.env` file, so it never had the ambient-state problem the Quickstart did
-— but `SAFE_MCP_POLICY_FILE` is now required there too, since startup no
-longer falls back to a `policy.toml` in the working directory.
+---
 
 ## Demo
 
-Real output, captured from both servers running as real subprocesses, driven
-over the real stdio MCP protocol, against the shipped `policy.example.toml` and
-a throwaway workspace. Nothing below is mocked or invented. Run
-`scripts/make_demo_sandbox.sh` to build that workspace and the `state/`
-directory it uses for the audit log and undo journal; reproducing the calls
-below also needs an MCP client of your own to issue them.
+Everything below is real captured output. Nothing here is hand-written, trimmed, or prettified after the fact — these are the actual `OperationResult` envelopes returned by a live MCP client talking to both servers, run against the seeded sandbox from `./scripts/make_demo_sandbox.sh` with `policy.example.toml`.
+
+Read the `code` field in each one. That taxonomy is the whole point: every outcome, success or refusal, comes back as the same shape.
 
 ### Terminal server
 
@@ -129,12 +128,11 @@ A denied command:
 }
 ```
 
+Note what the denial is _not_: a traceback, a raised exception, or a string the model has to guess at. It is a typed code with a reason attached.
+
 ### Files server
 
-The workspace was seeded with `report.pdf`, `photo.png` (ordinary files),
-`setup.exe` (a restraint skip — installer), `.bashrc` (a restraint skip —
-dotfile), and `link.pdf`, a symlink pointing outside the workspace (a
-protection skip).
+This sequence runs against a seeded workspace containing ordinary files, an installer, a dotfile, and a symlink — one of each thing the policy treats differently.
 
 `plan_organize` proposing moves and listing skips:
 
@@ -218,8 +216,9 @@ protection skip).
 }
 ```
 
-`move_file` refused by PROTECTION — the same symlink `plan_organize` skipped
-above, named explicitly:
+Now the interesting pair. Same tool, two named targets, two different answers.
+
+`move_file` refused by PROTECTION — the same symlink `plan_organize` skipped above, named explicitly:
 
 ```
 >>> tool: move_file  args: {"src": "link.pdf", "dest": "Documents/link.pdf"}
@@ -233,8 +232,7 @@ above, named explicitly:
 }
 ```
 
-`move_file` succeeding on the installer `plan_organize` deferred with
-`NEEDS_EXPLICIT_REQUEST`, now named explicitly:
+`move_file` succeeding on the installer `plan_organize` deferred with `NEEDS_EXPLICIT_REQUEST`, now named explicitly:
 
 ```
 >>> tool: move_file  args: {"src": "setup.exe", "dest": "Documents/setup.exe"}
@@ -252,76 +250,64 @@ above, named explicitly:
 }
 ```
 
-That contrast is the point of the two-layer model below: the symlink is refused
-no matter how it's asked for; the installer moves the moment it's asked for by
-name.
+The planner refused both. Asked directly, the mover refused one and did the other. That difference is not an inconsistency — it is the two-layer model, and it gets its own section below.
 
-## Architecture
+---
 
-Both servers are wiring. Neither re-implements policy, path containment,
-redaction, or auditing — they call one shared core.
+## System design
+
+### The servers are wiring, not policy
+
+Neither server file contains a safety rule. Every one of them lives in `safety/`, and both servers reach the same functions to get the same answers.
 
 ```mermaid
-flowchart TB
-    client(["MCP client"])
-
-    subgraph terminal["terminal server"]
-        tparse["parse.py<br/>argv split + metacharacter scan"]
-        texec["execute.py<br/>shell=False, env scrub, timeout, output cap"]
-    end
-
-    subgraph files["files server"]
-        finspect["inspect.py<br/>lstat facts — reports, never judges"]
-        fapply["apply.py<br/>move_one — containment, no overwrite"]
-    end
-
-    subgraph core["shared safety core — safety/"]
-        policy["policy.py<br/>deny-by-default · PROTECTION / RESTRAINT layers"]
-        paths["paths.py<br/>PathJail: resolve / resolve_for_write"]
-        redact["redact.py<br/>redact, then truncate"]
-        audit[("audit.py<br/>fail-closed JSONL — attempt + outcome")]
-    end
-
-    client -->|run_command / explain_command| tparse
-    client -->|list_files / plan_organize / apply_plan / move_file / undo / redo| finspect
-
-    tparse --> policy
-    finspect --> policy
-    policy --> paths
-    texec --> paths
-    fapply --> paths
-    texec --> redact
-
-    terminal -.->|every call, before and after| audit
-    files -.->|every call, before and after| audit
+flowchart TD
+    A["MCP client"] --> B["terminal server"]
+    A --> C["files server"]
+    B --> D["safety/policy.py<br/>allow or deny"]
+    C --> D
+    D --> E["safety/paths.py<br/>PathJail containment"]
+    E --> F["execute or move"]
+    F --> G["safety/redact.py<br/>secrets out, then truncate"]
+    G --> H["safety/audit.py<br/>append-only JSONL"]
+    H --> I["OperationResult"]
+    I --> A
 ```
 
-`safety/` imports nothing outside the standard library. Only the two servers
-depend on the `mcp` package.
+This is not tidiness for its own sake. It means a security fix lands in exactly one place, and it means a reviewer auditing this repo reads `safety/` and is done. There is no second implementation hiding in a server module, drifting quietly out of sync with the first.
 
-## The two-layer model: PROTECTION vs RESTRAINT
+### How a request actually flows
 
-Every file rule in `policy.toml` declares a `layer`:
+1. **Parse.** The command string is split into an argv list. Shell metacharacters are rejected here, before anything is interpreted — including inside quotes. That last part is deliberately conservative and it is a documented ceiling, not an oversight.
+2. **Evaluate.** The policy engine answers allow or deny. Deny always wins. Anything not explicitly permitted is refused, so an empty policy is a useless server rather than an open one.
+3. **Contain.** Every path is resolved and checked against the jail root. Symlinks are inspected as links and never followed through.
+4. **Act.** `subprocess.run` with `shell=False`, a scrubbed environment of exactly `PATH`, `HOME`, `LANG`, a timeout, and an output cap. Or, on the files side, a single guarded move recorded in a journal.
+5. **Redact, then truncate.** In that order, always.
+6. **Record.** Append to the audit log. If that write fails, the operation fails with it.
 
-- **protection** — a safety invariant. Binding on every tool, however the
-  request was phrased. Nothing you can ask for makes it permitted.
-- **restraint** — a rule that exists because filing this _automatically_ would
-  be a guess. It stops `plan_organize` acting on its own initiative; it does
-  not stop a request that names one specific file.
+### Six decisions worth stealing
 
-`plan_organize` walks the workspace unprompted, so it obeys both layers.
-`move_file` carries a request naming one specific file, so it obeys PROTECTION
-only — a restraint rule is not a safety refusal for a caller that isn't
-guessing.
+**Errors are data, not exceptions.** Every outcome is an `OperationResult` with a typed `ResultCode`. No traceback ever reaches the client. A model receiving a stack trace will try to work around it; a model receiving `POLICY_DENIED` has been told something useful and unambiguous.
 
-The demo above is this distinction end to end, on the same two files:
+**Deny wins, always.** Allow rules and deny rules are not weighted or ordered into a tiebreak. If a deny matches, the answer is no. Argument rules match tokens order-independently, so reshuffling flags is not a bypass.
 
-- **`link.pdf`** is a symlink pointing outside the workspace. `plan_organize`
-  skips it, and `move_file` refuses it too, by name, with the identical
-  `POLICY_DENIED` code. There is no phrasing that gets it through.
-- **`setup.exe`** is an installer. `plan_organize` skips it with
-  `NEEDS_EXPLICIT_REQUEST` — not a refusal, a pointer to `move_file`. Naming it
-  there succeeds.
+**Nothing starts without an explicit root.** Covered in the Quickstart, but it belongs in the design list too, because "sensible default" is how most sandboxes acquire their first escape.
+
+**The audit log is allowed to stop you.** Fail-closed by default: if the log cannot be written, the operation does not happen. You can flip it to fail-open with `SAFE_MCP_AUDIT_FAIL_MODE`, and that is a decision you make on purpose, in a config file, where someone can see it.
+
+**Redact before truncate.** Reverse those two and a 64KB output cap can slice a secret in half and emit the first fragment, having matched no pattern. This is a two-line ordering choice that closes a whole category of leak.
+
+**Entropy-based secret detection is off by default.** It fires on hashes, UUIDs, and base64 payloads constantly. A redactor that cries wolf gets disabled by its own users, which is worse than one that admits its limits up front.
+
+### PROTECTION vs RESTRAINT
+
+The skip rules split into two layers, and every rule declares which one it belongs to.
+
+**PROTECTION** is enforced by every tool, without exception. Only some of it is a declared rule — `unsafe-name` covers control characters in a filename. The rest is structural: a path escape fails containment in `safety/paths.py`, an occupied destination fails the `lstat` check in `servers/files/apply.py`, and a symlink matches no allow rule at all, falling through to deny-by-default — which `evaluate_layered` deliberately classifies as PROTECTION. See the note below. Either way there is no flag, no override, no "I know what I'm doing" argument. These are invariants.
+
+**RESTRAINT** is enforced only by `plan_organize`. Installers, application folders, system files, hidden files, directories. These are not dangerous — they are things an automatic classifier should not be guessing about on your behalf. The planner reports them as `NEEDS_EXPLICIT_REQUEST` and moves on.
+
+The consequence is the demo pair above. `move_file` will move an installer you named yourself, because refusing that would be paternalism, not safety. It will not move a symlink no matter how explicitly you ask, because that is containment.
 
 One nuance worth being explicit about: the symlink's refusal reason reads
 `"'organize' is not permitted by any rule (deny by default)"` rather than
@@ -332,7 +318,19 @@ as the strictest reading of something the policy has no vocabulary for. The
 generic wording is not a weaker guarantee; `move_file` naming the symlink
 directly, above, is the proof.
 
+One implementation detail I would repeat anywhere: the PROTECTION set is **derived by filtering** the full rule set, never assembled as its own list. Two hand-maintained lists drift, and the failure mode of drift here is a protection rule silently going missing. A filter cannot forget.
+
+### On the tests
+
+661 tests, all hermetic. No test writes real state: anything that executes does so against `tmp_path`, and the two suites that read the shipped `policy.toml` and `policy.example.toml` copy them into `tmp_path` first. No real audit log or workspace is ever touched. CI runs the suite plus a gitleaks scan on every push and pull request.
+
+The number will be stale the moment I add a test. The property that matters is the isolation, not the count.
+
+---
+
 ## Guarantees
+
+Each row names the module and function that enforces it. If a claim here is not backed by code you can open, it should not be in the table.
 
 | Guarantee                                                                   | Enforced by                                                                                                               |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -354,6 +352,8 @@ directly, above, is the proof.
 | The audit trail is fail-closed by default                                   | `safety/audit.py` `AuditLogger.record()` — an unwritable log raises, and the operation never happens                      |
 | Every refusal is recorded, with a reason                                    | `servers/*/server.py` `_serve()` — the single outcome-write point per tool                                                |
 
+---
+
 ## Threat model — explicitly out of scope
 
 - **A dangerous command you allowlisted.** If you allow an interpreter or a
@@ -373,6 +373,8 @@ directly, above, is the proof.
   code.
 - **A race between validating a path and acting on it (TOCTOU).** See "Honest
   caveats" below.
+
+---
 
 ## Compared to a naive MCP server
 
@@ -532,6 +534,8 @@ to move or forge.
 
 </details>
 
+---
+
 ## Honest caveats
 
 This is a hardening layer, not a vault. Read these before deploying either
@@ -565,12 +569,16 @@ server.
   child processes are not in a separate process group; the executor kills the
   direct child only, so anything that command spawned can outlive it.
 
+---
+
 ## Related work
 
 - [hardened-terminal-mcp](https://github.com/Asaad-Suliman/hardened-terminal-mcp) —
   the standalone predecessor to this suite's terminal server.
 - [MCP-file-organizer](https://github.com/Asaad-Suliman/MCP-file-organizer) —
   the standalone predecessor to this suite's file server.
+
+---
 
 ## License
 
