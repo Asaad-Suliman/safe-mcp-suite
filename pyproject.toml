@@ -19,3 +19,8 @@ include = ["safety*", "servers*", "config*"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
