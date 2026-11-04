@@ -269,6 +269,9 @@ def test_only_allowlisted_variables_reach_the_child(jail: PathJail) -> None:
     code = "import os; print(','.join(sorted(os.environ)))"
     result = _run(_python(code), jail)
     names = set(result.detail["stdout"].strip().split(","))
+    # With no LANG set, the child Python adds LC_CTYPE to its own environment
+    # (C-locale coercion, PEP 538). We did not pass it, so it is not a leak.
+    names.discard("LC_CTYPE")
     assert names <= set(execute.ENV_ALLOWLIST)
 
 
